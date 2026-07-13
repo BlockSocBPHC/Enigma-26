@@ -10,6 +10,7 @@ const getTeamScore = async (name: string) => {
         .eq("name", name)
         .single();
     if (error) throw error;
+    
     return data
 }
 

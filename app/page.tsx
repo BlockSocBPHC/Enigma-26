@@ -1,11 +1,15 @@
-import updateFinalScore from "./components/updateFinalScore"
-import scores from "./components/updateFinalScore"
-
+import getTeamScore from "./utils/getTeamScore"
+import GoogleLoginButton from "./components/googleLoginButton"
 export default async function Page() {
-  await updateFinalScore("Bitcoin")
+  await getTeamScore("Bitcoin")
+ 
   return (
     <>
       <h1>Hello World </h1>
+
+      {/* Will be implemented after everything is completed */}
+      {/* <GoogleLoginButton/>   */}
+      
     </>
   )
 }
