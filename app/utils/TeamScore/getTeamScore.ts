@@ -6,7 +6,7 @@ const getTeamScore = async (name: string) => {
 
     const { data, error } = await supabase
         .from("teams")
-        .select("adoption, security, treasury, stability, final_score")
+        .select("adoption, security, treasury, decentralization, stability, final_score")
         .eq("name", name)
         .single();
     if (error) throw error;

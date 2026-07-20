@@ -1,7 +1,7 @@
 // "use server will be removed afterwards"
 "use server"
 import { createClient } from '@/utils/supabase/client'
-import getTeamScore from '../utils/getTeamScore'
+import getTeamScore from './getTeamScore'
 
 const updateFinalScore = async (teamName: string) => {
     const supabase = createClient()

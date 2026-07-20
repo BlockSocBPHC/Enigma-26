@@ -1,18 +1,8 @@
 import { createClient } from "@/utils/supabase/client"
+import type {AttackType} from "./../lib/types"
 
-type AttackType =
-  | "Spam Attack"
-  | "Validator Bribery"
-  | "Governance Attack"
-  | "Treasury Drain"
-  | "Network Fork Attack"
-  | "Reputation Attack"
-  | "Smart Contract Exploit"
 
-const calculateDefence = async (
-  teamName: string,
-  attackType: AttackType
-) => {
+const calculateDefence = async (teamName: string, attackType: AttackType) => {
   const supabase = createClient()
 
   const { data, error } = await supabase
@@ -32,7 +22,6 @@ const calculateDefence = async (
     adoption,
     security,
     treasury,
-    stability,
     decentralization,
   } = data
 
