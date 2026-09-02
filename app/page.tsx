@@ -6,11 +6,13 @@ import getDefenseScore from "./utils/attack/ValuesGetter/getDefenseScore"
 import isAttackSuccessful from "./utils/attack/isAttackSuccessful"
 import afterAttack from "./components/afterAttack"
 import applyRebuild from "./utils/Rebuild/applyRebuild"
+import applyEventChanges from "./utils/GlobalEvents/applyEventChanges"
 
 export default function Page() {
   
   const handleClick = async () => {
-    // await getTeamScore("Avalanche")
+    // const data = await getTeamScore("Bitcoin")
+    // console.log(data)
     // await applyUpgradePhase("Bitcoin", "Transaction Fees", "Low")
     // await applyUpgradePhase("Bitcoin", "Security Budget", "Low")
     // await applyUpgradePhase("Bitcoin", "Validator Rewards", "Low")
@@ -21,6 +23,7 @@ export default function Page() {
     // const data = await afterAttack("Cardano", "Bitcoin", "Smart Contract Exploit", "All-Out Attack")
     // const data = await applyRebuild("Bitcoin", "Emergency Recovery")
     // console.log(data)
+    // await applyEventChanges("Bitcoin")
   }
   return (
     <>
