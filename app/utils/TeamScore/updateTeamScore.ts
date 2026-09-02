@@ -1,7 +1,7 @@
 import { createClient } from "@/utils/supabase/client";
-import updateFinalScore from "../TeamScore/updateTeamScore";
+import calulateFinalTeamScore from "./calculateFinalTeamScore";
 
-const updateMetrics = async (
+const updateTeamScore = async (
     teamName: string,
     adoption: number,
     security: number,
@@ -9,8 +9,9 @@ const updateMetrics = async (
     treasury: number,
     stability: number
 ) => {
-    const supabase = createClient();
+    const final_score = await calulateFinalTeamScore(adoption, security, decentralization, treasury, stability);
 
+    const supabase = createClient();
     const { data, error } = await supabase
         .from("teams")
         .update({
@@ -19,13 +20,14 @@ const updateMetrics = async (
             decentralization,
             treasury,
             stability,
+            final_score,
         })
         .eq("name", teamName)
         .select()
         .single();
 
     if (error) throw error;
-    await updateFinalScore(teamName)
+    return data
 };
 
-export default updateMetrics;
+export default updateTeamScore;

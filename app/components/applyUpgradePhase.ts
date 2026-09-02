@@ -1,7 +1,7 @@
 import getTeamScore from "../utils/TeamScore/getTeamScore"
 import type { upgradeOptions, upgradeTypes } from "../lib/types"
 import getUpgradeValues from "../utils/UpgradeValues/getUpgradeValues"
-import updateMetrics from "../utils/UpgradeValues/updateUpgradeValues"
+import updateMetrics from "../utils/TeamScore/updateTeamScore"
 
 const applyUpgradePhase = async (teamName: string, upgradeOption: upgradeOptions, upgradeType: upgradeTypes) => {
     let { adoption, security, decentralization, treasury, stability } = await getTeamScore(teamName)

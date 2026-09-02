@@ -1,7 +1,7 @@
 export type upgradeTypes = "Low" | "Medium" | "High"
 export type upgradeOptions = "Transaction Fees" | "Security Budget" | "Validator Rewards"
 
-export type AttackType =
+export type AttackCategory =
   | "Spam Attack"
   | "Validator Bribery"
   | "Governance Attack"
@@ -9,3 +9,10 @@ export type AttackType =
   | "Network Fork Attack"
   | "Reputation Attack"
   | "Smart Contract Exploit"
+
+  export type AttackType = 
+  | "Weak Attack"
+  | "Standard Attack"
+  | "Strong Attack"
+  | "Coordinated Attack"
+  | "All-Out Attack"
