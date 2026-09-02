@@ -5,6 +5,7 @@ import applyUpgradePhase from "./components/applyUpgradePhase"
 import getDefenseScore from "./utils/attack/ValuesGetter/getDefenseScore"
 import isAttackSuccessful from "./utils/attack/isAttackSuccessful"
 import afterAttack from "./components/afterAttack"
+import applyRebuild from "./utils/Rebuild/applyRebuild"
 
 export default function Page() {
   
@@ -17,8 +18,9 @@ export default function Page() {
     // console.log("defense score: ", data);
     // const value = await isAttackSuccessful("Bitcoin", "Smart Contract Exploit", "All-Out Attack")
     // console.log("bool", value)
-    const data = await afterAttack("Cardano", "Bitcoin", "Smart Contract Exploit", "All-Out Attack")
-    console.log(data)
+    // const data = await afterAttack("Cardano", "Bitcoin", "Smart Contract Exploit", "All-Out Attack")
+    // const data = await applyRebuild("Bitcoin", "Emergency Recovery")
+    // console.log(data)
   }
   return (
     <>
@@ -27,9 +29,9 @@ export default function Page() {
       {/* Will be implemented after everything is completed */}
       {/* <GoogleLoginButton/>   */}
 
-      {/* <button onClick={handleClick}>
+      <button onClick={handleClick}>
         Click Me
-      </button> */}
+      </button>
       
     </>
   )

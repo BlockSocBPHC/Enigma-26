@@ -16,3 +16,9 @@ export type AttackCategory =
   | "Strong Attack"
   | "Coordinated Attack"
   | "All-Out Attack"
+
+  export type RebuildType = 
+  | "Emergency Recovery"
+  | "Marketing Campaign"
+  | "Security Recovery"
+  | "Validator Recruitment"
