@@ -34,3 +34,20 @@ export type AttackCategory =
   | "Regulatory Crackdown"
   | "Security Grant"
   | "Validator Incentive Program";
+
+  export type TeamScore = {
+  adoption: number
+  security: number
+  treasury: number
+  decentralization: number
+  stability: number
+}
+
+export type Leaderboard = {
+  adoption: number
+  security: number
+  treasury: number
+  decentralization: number
+  stability: number
+  name: string
+}

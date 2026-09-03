@@ -7,8 +7,52 @@ import isAttackSuccessful from "./utils/attack/isAttackSuccessful"
 import afterAttack from "./components/afterAttack"
 import applyRebuild from "./utils/Rebuild/applyRebuild"
 import applyEventChanges from "./utils/GlobalEvents/applyEventChanges"
+import getLeaderboard from "./utils/Leaderboard/getLeaderboard"
+import { useEffect, useState } from "react"
+import { createClient } from "@/utils/supabase/client"
+import { Leaderboard, TeamScore } from "./lib/types"
 
 export default function Page() {
+//   const [teamname, setTeamname] = useState<string> ("Bitcoin")
+//   const [leaderboard, setLeaderboard] = useState<Leaderboard[]> ([])
+//   const [teamScore, setTeamScore] = useState<TeamScore> ()
+// useEffect(() => {
+//     console.log("useeffect is running")
+//     const supabase = createClient()
+
+//     console.log("Setting up realtime...")
+
+//     const channel = supabase
+//         .channel("leaderboard")
+//         .on(
+//             "postgres_changes",
+//             {
+//                 event: "UPDATE",
+//                 schema: "public",
+//                 table: "teams",
+//             },
+//             async (payload) => {
+//                 const data = await getLeaderboard()
+//                 setLeaderboard(data)
+//                 const data1 = await getTeamScore(teamname)
+//                 setTeamScore(data1)
+//             }
+//         )
+//         .subscribe((status) => {
+//             console.log("Subscription status:", status)
+//         })
+
+//     return () => {
+//         supabase.removeChannel(channel)
+//     }
+// }, [])
+
+// useEffect(()=> {
+//   console.log("teamScore: ",teamScore)
+// },[teamScore])
+// useEffect(()=> {
+//   console.log("leaderboard: ",leaderboard)
+// },[leaderboard])
   
   const handleClick = async () => {
     // const data = await getTeamScore("Bitcoin")
@@ -24,6 +68,8 @@ export default function Page() {
     // const data = await applyRebuild("Bitcoin", "Emergency Recovery")
     // console.log(data)
     // await applyEventChanges("Bitcoin")
+    // const data = await getLeaderboard()
+    // console.log(data)
   }
   return (
     <>
