@@ -1,3 +1,4 @@
+"use server"
 import getTeamScore from "../utils/TeamScore/getTeamScore"
 import type { upgradeOptions, upgradeTypes } from "../lib/types"
 import getUpgradeValues from "../utils/UpgradeValues/getUpgradeValues"
@@ -15,9 +16,6 @@ const applyUpgradePhase = async (teamName: string, upgradeOption: upgradeOptions
 
     await updateMetrics(teamName, adoption, security, decentralization, treasury, stability)
 
-    const data = await getTeamScore(teamName)
-    console.log(data)
-    return data
 }
 
 export default applyUpgradePhase

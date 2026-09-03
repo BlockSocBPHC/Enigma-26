@@ -1,8 +1,9 @@
-import { createClient } from '@/utils/supabase/client'
+import { createClient } from '@/utils/supabase/server'
 import { upgradeOptions, upgradeTypes } from '../../lib/types'
-
+import { cookies } from "next/headers"
 const getUpgradeValues = async (upgradeOption: upgradeOptions, upgradeType: upgradeTypes) => {
-    const supabase = createClient()
+    const cookieStore = await cookies()
+    const supabase = createClient(cookieStore)
     const {data, error} = await supabase
         .from("upgrades")
         .select("adoption_change, security_change, decentralization_change, treasury_change, stability_change")

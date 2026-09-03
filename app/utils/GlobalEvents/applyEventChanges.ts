@@ -1,3 +1,4 @@
+"use server"
 import getTeamScore from "../TeamScore/getTeamScore"
 import getDetails from "./getDetails"
 import updateTeamScore from "../TeamScore/updateTeamScore"
@@ -5,7 +6,6 @@ import getEvent from "./getEvent"
 
 const applyEventChanges = async (teamname: string) => {
     const global_event = getEvent()
-    console.log(global_event)
     let {adoption, security, decentralization, treasury, stability} = await getTeamScore(teamname)
     const {security_change, decentralization_change, treasury_change, adoption_change, stability_change} = await getDetails(global_event)
     adoption += adoption_change

@@ -1,3 +1,4 @@
+"use server"
 import { AttackCategory, AttackType } from "@/app/lib/types"
 import isAttackSuccessful from "../utils/attack/isAttackSuccessful"
 import getTeamScore from "../utils/TeamScore/getTeamScore"
@@ -20,10 +21,8 @@ const afterAttack = async (attackingTeamname: string,attackedTeamname: string, a
 
         const data = await updateTeamScore(attackedTeamname, adoption, security, decentralization, treasury, stability);
         await attackingTeamChanges(attackingTeamname, attack_type)
-        return data
     }
     else {
-        console.log("attack failed")
        await attackingTeamChanges(attackingTeamname, attack_type)
     }
 

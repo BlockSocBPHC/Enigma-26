@@ -1,3 +1,4 @@
+"use server"
 import { RebuildType } from '@/app/lib/types'
 import getTeamScore from '../TeamScore/getTeamScore'
 import getRebuildDetails from './getRebuildDetails'

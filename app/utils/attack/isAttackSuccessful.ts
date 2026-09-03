@@ -1,3 +1,4 @@
+
 import { AttackCategory, AttackType } from "@/app/lib/types"
 import getDefenseScore from "./ValuesGetter/getDefenseScore"
 import getProbValues from "./ValuesGetter/getProbValues"

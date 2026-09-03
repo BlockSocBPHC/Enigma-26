@@ -76,11 +76,11 @@ export default function Page() {
       <h1>Hello World </h1>
 
       {/* Will be implemented after everything is completed */}
-      {/* <GoogleLoginButton/>   */}
+      <GoogleLoginButton/>  
 
-      <button onClick={handleClick}>
+      {/* <button onClick={handleClick}>
         Click Me
-      </button>
+      </button> */}
       
     </>
   )

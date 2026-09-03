@@ -1,8 +1,10 @@
-import { createClient } from "@/utils/supabase/client"
+
+import { createClient } from "@/utils/supabase/server"
+import { cookies } from "next/headers"
 
 const getProbValues = async (diff: number) => {
-    console.log("diff : ", diff)
-    const supabase = createClient()
+    const cookieStore = await cookies()
+    const supabase = createClient(cookieStore)
     const { data, error } = await supabase
         .from("success_probability")
         .select("probability")

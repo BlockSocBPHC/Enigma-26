@@ -1,8 +1,10 @@
-import { createClient } from '@/utils/supabase/client'
+import { createClient } from '@/utils/supabase/server'
 import { GlobalEventType } from '@/app/lib/types'
+import { cookies } from 'next/headers'
 
 const getDetails = async (global_event: GlobalEventType) => {
-    const supabase = createClient()
+    const cookieStore = await cookies()
+    const supabase = createClient(cookieStore)
 
     const { data, error } = await supabase
         .from("global_events")
