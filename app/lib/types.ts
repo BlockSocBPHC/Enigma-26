@@ -51,3 +51,8 @@ export type Leaderboard = {
   stability: number
   name: string
 }
+
+export type TeamDetails = {
+  teamName: string
+  teamMembers: string[]
+}

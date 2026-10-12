@@ -19,7 +19,7 @@ const afterAttack = async (attackingTeamname: string,attackedTeamname: string, a
         treasury += treasury_change
         stability += stability_change
 
-        await updateTeamScore(attackedTeamname, adoption, security, decentralization, treasury, stability);
+        const data = await updateTeamScore(attackedTeamname, adoption, security, decentralization, treasury, stability);
         await attackingTeamChanges(attackingTeamname, attack_type)
     }
     else {
