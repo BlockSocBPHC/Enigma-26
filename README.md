@@ -20,6 +20,12 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Game setup
+
+The dashboard implements the five-round ENIGMA ruleset: launch strategy, attack, rebuild, counterattack, a shared market event, and weighted final ranking.
+
+Before the first game, run [supabase/schema.sql](./supabase/schema.sql) in the Supabase SQL editor. It adds the two small tables used to persist a team’s round and to keep the global market event shared by every team. Existing teams and team_info records are preserved.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

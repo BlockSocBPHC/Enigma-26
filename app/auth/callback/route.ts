@@ -14,14 +14,14 @@ export async function GET(request: Request) {
         const message = errorDescription || error;
 
         return NextResponse.redirect(
-            `${origin}/login?error=${encodeURIComponent(message)}`
+            `${origin}/?error=${encodeURIComponent(message)}`
         );
     }
 
     // No authorization code
     if (!code) {
         return NextResponse.redirect(
-            `${origin}/login?error=${encodeURIComponent(
+            `${origin}/?error=${encodeURIComponent(
                 "Authentication was cancelled or failed."
             )}`
         );
@@ -38,7 +38,7 @@ export async function GET(request: Request) {
         console.error("Auth callback error:", exchangeError);
 
         return NextResponse.redirect(
-            `${origin}/login?error=${encodeURIComponent(
+            `${origin}/?error=${encodeURIComponent(
                 "Unable to complete authentication. Please try again."
             )}`
         );

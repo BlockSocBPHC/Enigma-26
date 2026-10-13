@@ -15,7 +15,6 @@ const applyEventChanges = async (teamname: string) => {
     stability += stability_change
 
     const data = await updateTeamScore(teamname, adoption, security, decentralization, treasury, stability)
-    console.log(data)
     return data
 }
 

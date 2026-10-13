@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 export interface NavbarProps {
@@ -14,12 +16,15 @@ export interface NavbarProps {
 
 // Each id must exist on a section in the dashboard page.
 const LINKS = [
-    { id: "/leaderboard", label: "Leaderboard" },
+    { id: "/dashboard", label: "Dashboard" },
+    { id: "/scoreboard", label: "Scoreboard" },
+    { id: "/rulebook", label: "Rulebook" },
 ];
 
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#2cff5e]";
 
 export default function Navbar({ roundNumber, roundName, teamName, teamMembers, links = LINKS, userEmail, onSignOut }: NavbarProps) {
+    const pathname = usePathname();
     const [menuOpen, setMenuOpen] = useState(false); // mobile links panel
     const [profileOpen, setProfileOpen] = useState(false);
     const [active, setActive] = useState(links[0]?.id ?? "");
@@ -27,7 +32,10 @@ export default function Navbar({ roundNumber, roundName, teamName, teamMembers, 
 
     // Highlight the link of the section currently in view.
     useEffect(() => {
-        const els = links.map((l) => document.getElementById(l.id)).filter((e): e is HTMLElement => !!e);
+        const els = links
+            .filter((l) => !l.id.startsWith("/"))
+            .map((l) => document.getElementById(l.id))
+            .filter((e): e is HTMLElement => !!e);
         if (!els.length) return;
         const io = new IntersectionObserver(
             (entries) => {
@@ -78,17 +86,14 @@ export default function Navbar({ roundNumber, roundName, teamName, teamMembers, 
         <header className="sticky top-0 z-50 border-b border-[rgba(130,255,150,0.16)] bg-[rgba(3,8,5,0.82)] shadow-[0_6px_30px_rgba(0,0,0,0.45)] backdrop-blur-md">
             <div className="mx-auto flex h-16 max-w-[1280px] items-center gap-2.5 px-3.5 md:gap-5 md:px-5">
                 {/* brand */}
-                <a
-                    href={'/dashboard'}
+                <Link
+                    href="/dashboard"
                     className={`relative rounded-[10px] px-3.5 py-3 text-sm font-semibold no-underline transition-colors md:py-2 md:text-[13px] ${FOCUS} `}
                 >
-
                     <span className="text-[17px] font-black tracking-[0.06em] [text-shadow:2px_2px_0_#2d6b1b] min-[441px]:text-xl">
                         ENIGMA
                     </span>
-
-                </a>
-
+                </Link>
 
                 {/* section links — inline on desktop, dropdown panel on mobile */}
                 <nav
@@ -96,17 +101,34 @@ export default function Navbar({ roundNumber, roundName, teamName, teamMembers, 
                     className={`${menuOpen ? "flex" : "hidden"} absolute inset-x-0 top-full flex-col gap-0.5 border-b border-[rgba(130,255,150,0.4)] bg-[rgba(3,8,5,0.97)] px-3.5 pb-3.5 pt-2.5 md:static md:ml-2 md:flex md:flex-row md:items-center md:gap-1 md:border-0 md:bg-transparent md:p-0`}
                 >
                     {links.map((l) => {
-                        const on = active === l.id;
+                        const isRoute = l.id.startsWith("/");
+                        const on = isRoute ? pathname === l.id : active === l.id;
+                        const linkClasses = `relative rounded-[10px] px-3.5 py-3 text-sm font-semibold no-underline transition-colors md:py-2 md:text-[13px] ${FOCUS} ${on
+                            ? "bg-[rgba(44,255,94,0.12)] text-[#f3fff0] md:after:absolute md:after:inset-x-3.5 md:after:bottom-[3px] md:after:h-0.5 md:after:rounded md:after:bg-[#2cff5e] md:after:shadow-[0_0_8px_#2cff5e] md:after:content-['']"
+                            : "text-[#8fae93] hover:bg-[rgba(44,255,94,0.07)] hover:text-[#f3fff0]"
+                        }`;
+
+                        if (isRoute) {
+                            return (
+                                <Link
+                                    key={l.id}
+                                    href={l.id}
+                                    aria-current={on ? "true" : undefined}
+                                    onClick={() => setMenuOpen(false)}
+                                    className={linkClasses}
+                                >
+                                    {l.label}
+                                </Link>
+                            );
+                        }
+
                         return (
                             <a
                                 key={l.id}
-                                href={`${l.id}`}
+                                href={`#${l.id}`}
                                 aria-current={on ? "true" : undefined}
                                 onClick={(e) => go(e, l.id)}
-                                className={`relative rounded-[10px] px-3.5 py-3 text-sm font-semibold no-underline transition-colors md:py-2 md:text-[13px] ${FOCUS} ${on
-                                    ? "bg-[rgba(44,255,94,0.12)] text-[#f3fff0] md:after:absolute md:after:inset-x-3.5 md:after:bottom-[3px] md:after:h-0.5 md:after:rounded md:after:bg-[#2cff5e] md:after:shadow-[0_0_8px_#2cff5e] md:after:content-['']"
-                                    : "text-[#8fae93] hover:bg-[rgba(44,255,94,0.07)] hover:text-[#f3fff0]"
-                                    }`}
+                                className={linkClasses}
                             >
                                 {l.label}
                             </a>

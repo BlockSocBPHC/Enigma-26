@@ -1,5 +1,5 @@
 import { createClient } from "@/utils/supabase/server";
-import calulateFinalTeamScore from "./calculateFinalTeamScore";
+import calculateFinalTeamScore from "./calculateFinalTeamScore";
 import { cookies } from "next/headers";
 const updateTeamScore = async (
     teamName: string,
@@ -9,7 +9,7 @@ const updateTeamScore = async (
     treasury: number,
     stability: number
 ) => {
-    const final_score = await calulateFinalTeamScore(adoption, security, decentralization, treasury, stability);
+    const final_score = await calculateFinalTeamScore(adoption, security, decentralization, treasury, stability);
     const cookieStore = await cookies()
     const supabase = createClient(cookieStore);
     const { data, error } = await supabase

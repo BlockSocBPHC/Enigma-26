@@ -1,5 +1,5 @@
 
-const calulateFinalTeamScore = async (
+const calculateFinalTeamScore = async (
     adoption: number,
     security: number,
     decentralization: number,
@@ -11,4 +11,4 @@ const calulateFinalTeamScore = async (
     return final_Score
 }
 
-export default calulateFinalTeamScore
+export default calculateFinalTeamScore

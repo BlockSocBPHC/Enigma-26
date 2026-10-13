@@ -1,141 +1,145 @@
-"use client"
-import { createClient } from "@/utils/supabase/client"
-import { useRouter } from "next/navigation"
-import { useEffect, useState } from "react"
-import isRegistered from "@/app/utils/IsRegistered/isRegistered"
-import getTeamScore from "@/app/utils/TeamScore/getTeamScore"
-import getLeaderboard from "@/app/utils/Leaderboard/getLeaderboard"
-import { TeamDetails } from "@/app/lib/types"
-import Navbar from "@/app/components/navbar"
-import Info from "@/app/components/info"
-import { TeamScore } from "@/app/lib/types"
+import { cookies } from "next/headers";
+import Link from "next/link";
+import { redirect } from "next/navigation";
+import DashboardGame from "@/app/(protected)/dashboard/dashboard-game";
+import type { Leaderboard, TeamDetails, TeamScore } from "@/app/lib/types";
+import { createClient } from "@/utils/supabase/server";
 
-type Row = Record<string, unknown>
+export default async function DashboardPage() {
+  const cookieStore = await cookies();
+  const supabase = createClient(cookieStore);
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user?.email) redirect("/");
 
-// Sections the navbar links to (ids must match the sections below).
-const NAV_LINKS = [
-  // { id: "dashboard", label: "dashboard"},
-  { id: "leaderboard", label: "Leaderboard" },
-  { id: "rulebook", label: "Rulebook" },
-]
+  // Try finding team by leader email (case-insensitive)
+  const { data: leaderTeam } = await supabase
+    .from("team_info")
+    .select("teamname, teammembers")
+    .ilike("teamleaderemail", user.email)
+    .maybeSingle();
 
-const CURRENT_ROUND = 1 // hardcoded for now
+  let resolvedTeamName = leaderTeam?.teamname;
+  let resolvedMembers: string[] = Array.isArray(leaderTeam?.teammembers) ? leaderTeam.teammembers : [];
 
-const panel = "rounded-2xl border border-[rgba(130,255,150,0.16)] bg-[rgba(7,17,10,0.8)] p-5"
-const label = "text-xs font-bold uppercase tracking-[0.14em] text-[#a8f27a]"
+  // If not leader, check if user is listed in any team members
+  if (!resolvedTeamName) {
+    const { data: allTeams } = await supabase
+      .from("team_info")
+      .select("teamname, teammembers");
 
-export default function DashboardPage() {
-  const [teamDetails, setteamDetails] = useState<TeamDetails | undefined>()
-  const [userEmail, setUserEmail] = useState<string | null>(null)
-  const [teamScore, setTeamScore] = useState<TeamScore | null>(null)
-  const [leaderboard, setLeaderboard] = useState<Row[]>([])
-  const router = useRouter()
+    const matched = allTeams?.find((t) =>
+      Array.isArray(t.teammembers) &&
+      t.teammembers.some((m: string) => m.toLowerCase() === user.email?.toLowerCase())
+    );
 
-  // for unregistered user
-  useEffect(() => {
-    const load = async () => {
-      const supabase = createClient()
-      const { data: { user }, error } = await supabase.auth.getUser()
-
-      if (error || !user?.email) {
-        router.push("/")
-        return
-      }
-      setUserEmail(user.email)
-
-      const teamDetails = await isRegistered(user.email)
-      if (teamDetails) {
-        setteamDetails(teamDetails)
-        const score = await getTeamScore(teamDetails.teamName)
-        const board = await getLeaderboard()
-        setTeamScore(score)
-        setLeaderboard(board)
-      } else {
-        alert("You have not Registered")
-        router.push("/")
-      }
+    if (matched) {
+      resolvedTeamName = matched.teamname;
+      resolvedMembers = Array.isArray(matched.teammembers) ? matched.teammembers : [];
     }
-    load()
-  }, [router])
-
-  const signOut = async () => {
-    const supabase = createClient()
-    await supabase.auth.signOut()
-    router.push("/")
   }
 
-  const columns = leaderboard[0] ? Object.keys(leaderboard[0]) : []
+  // If still not found, render an unregistered screen rather than infinite redirect
+  if (!resolvedTeamName) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-[#030604] px-4 text-[#f3fff0]">
+        <div className="w-full max-w-md rounded-3xl border border-red-500/30 bg-[rgba(18,6,7,0.85)] p-8 text-center shadow-2xl backdrop-blur-md">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-red-500/10 text-2xl text-red-400">
+            ⚠
+          </div>
+          <h1 className="mt-5 text-2xl font-black">Not Registered</h1>
+          <p className="mt-3 text-sm leading-relaxed text-[#c9a6a8]">
+            Signed in as <b className="text-white">{user.email}</b>. This email is not registered as a team leader or member for ENIGMA.
+          </p>
+          <div className="mt-6 flex flex-col gap-3">
+            <form action="/auth/signout" method="post">
+              {/* Fallback to simple link redirect */}
+            </form>
+            <Link
+              href="/"
+              className="inline-block rounded-xl bg-white/10 px-4 py-3 text-sm font-bold text-white transition hover:bg-white/20"
+            >
+              ← Return Home
+            </Link>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  // Load team score
+  const { data: scoreData } = await supabase
+    .from("teams")
+    .select("adoption, security, treasury, decentralization, stability")
+    .eq("name", resolvedTeamName)
+    .maybeSingle();
+
+  const score: TeamScore = scoreData ? {
+    adoption: Number(scoreData.adoption ?? 100),
+    security: Number(scoreData.security ?? 100),
+    treasury: Number(scoreData.treasury ?? 100),
+    decentralization: Number(scoreData.decentralization ?? 100),
+    stability: Number(scoreData.stability ?? 100),
+  } : {
+    adoption: 100,
+    security: 100,
+    treasury: 100,
+    decentralization: 100,
+    stability: 100,
+  };
+
+  // Load leaderboard
+  const { data: leaderboardData } = await supabase
+    .from("teams")
+    .select("name, adoption, security, treasury, decentralization, stability");
+
+  const leaderboard: Leaderboard[] = Array.isArray(leaderboardData)
+    ? leaderboardData.map((row) => ({
+        name: String(row.name),
+        adoption: Number(row.adoption ?? 0),
+        security: Number(row.security ?? 0),
+        treasury: Number(row.treasury ?? 0),
+        decentralization: Number(row.decentralization ?? 0),
+        stability: Number(row.stability ?? 0),
+      }))
+    : [];
+
+  // Determine current round (game_rounds table with cookie fallback)
+  let initialRound = 1;
+  try {
+    const { data: gameRow, error: gameError } = await supabase
+      .from("game_rounds")
+      .select("current_round")
+      .eq("team_name", resolvedTeamName)
+      .maybeSingle();
+    if (!gameError && gameRow?.current_round) {
+      initialRound = Number(gameRow.current_round);
+    } else {
+      const cookieVal = cookieStore.get(`enigma_round_${resolvedTeamName}`)?.value;
+      if (cookieVal) {
+        const parsed = parseInt(cookieVal, 10);
+        if (!isNaN(parsed) && parsed >= 1) initialRound = parsed;
+      }
+    }
+  } catch {
+    const cookieVal = cookieStore.get(`enigma_round_${resolvedTeamName}`)?.value;
+    if (cookieVal) {
+      const parsed = parseInt(cookieVal, 10);
+      if (!isNaN(parsed) && parsed >= 1) initialRound = parsed;
+    }
+  }
+
+  const team: TeamDetails = {
+    teamName: resolvedTeamName,
+    teamMembers: resolvedMembers,
+  };
 
   return (
-    <div className="min-h-screen bg-[#030604] bg-[radial-gradient(1100px_650px_at_50%_-10%,#0b2a14,transparent_62%)] text-[#f3fff0]">
-      <Navbar
-        teamName={teamDetails?.teamName ?? ""}
-        teamMembers={teamDetails?.teamMembers ?? []}
-        userEmail={userEmail}
-        roundNumber={CURRENT_ROUND}
-        links={NAV_LINKS}
-        onSignOut={signOut}
-      />
-
-      {/* RIGHT: Fixed Team Score */}
-      <aside className="fixed right-6 top-24 z-40 w-80">
-        <div className={panel}>
-          <p className={label}>Performance</p>
-
-          <h2 className="mt-2 text-xl font-extrabold">
-            Team Score
-          </h2>
-
-          <p className="mt-1 text-sm text-[#8fae93]">
-            {teamDetails?.teamName ?? "Loading team..."}
-          </p>
-
-          {teamScore ? (
-            <div className="mt-5 space-y-5">
-              {[
-                { key: "adoption", label: "Adoption" },
-                { key: "security", label: "Security" },
-                { key: "treasury", label: "Treasury" },
-                { key: "decentralization", label: "Decentralization" },
-                { key: "stability", label: "Stability" },
-              ].map((metric) => {
-                const value = Number(
-                  teamScore[metric.key as keyof TeamScore] ?? 0
-                );
-
-                return (
-                  <div key={metric.key}>
-                    <div className="mb-2 flex items-center justify-between gap-3">
-                      <span className="text-sm text-[#8fae93]">
-                        {metric.label}
-                      </span>
-
-                      <span className="text-sm font-bold text-[#f3fff0]">
-                        {value}
-                      </span>
-                    </div>
-
-                    <div className="h-2 overflow-hidden rounded-full bg-white/10">
-                      <div
-                        className="h-full rounded-full bg-[#2cff5e] transition-all"
-                        style={{
-                          width: `${Math.max(0, Math.min(value, 100))}%`,
-                        }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <p className="mt-5 text-sm text-[#8fae93]">
-              Loading score details...
-            </p>
-          )}
-        </div>
-      </aside>
-
-
-    </div>
-  )
+    <DashboardGame
+      team={team}
+      userEmail={user.email}
+      initialScore={score}
+      initialLeaderboard={leaderboard}
+      initialRound={initialRound}
+    />
+  );
 }

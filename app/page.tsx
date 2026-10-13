@@ -7,12 +7,14 @@ import "./landing.css";
 
 function NetworkBg() {
   const { nodes, edges } = useMemo(() => {
-    let seed = 11;
-    const rnd = () => {
-      seed = (seed * 16807) % 2147483647;
-      return seed / 2147483647;
+    const deterministicRandom = (index: number) => {
+      const value = Math.sin(index * 19.19 + 11) * 43758.5453;
+      return value - Math.floor(value);
     };
-    const nodes = Array.from({ length: 36 }, () => ({ x: Math.round(rnd() * 1000), y: Math.round(rnd() * 1000) }));
+    const nodes = Array.from({ length: 36 }, (_, index) => ({
+      x: Math.round(deterministicRandom(index * 2) * 1000),
+      y: Math.round(deterministicRandom(index * 2 + 1) * 1000),
+    }));
     const edges: [number, number][] = [];
     nodes.forEach((a, i) =>
       nodes.forEach((b, j) => {
@@ -61,7 +63,13 @@ export default function LandingPage() {
   const [email, setEmail] = useState<string | null>(null);
   const [checking, setChecking] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(() => {
+    if (typeof window !== "undefined") {
+      const param = new URLSearchParams(window.location.search).get("error");
+      return param ? decodeURIComponent(param) : "";
+    }
+    return "";
+  });
 
   useEffect(() => {
     let alive = true;
@@ -70,6 +78,7 @@ export default function LandingPage() {
       setEmail(data.user?.email ?? null);
       setChecking(false);
     });
+
     return () => {
       alive = false;
     };

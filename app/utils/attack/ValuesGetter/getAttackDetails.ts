@@ -1,5 +1,5 @@
 
-import { AttackCategory, AttackType } from "@/app/lib/types"
+import { AttackType } from "@/app/lib/types"
 import { createClient } from "@/utils/supabase/server"
 import { cookies } from "next/headers"
 

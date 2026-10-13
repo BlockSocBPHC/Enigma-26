@@ -22,6 +22,7 @@ export type AttackCategory =
   | "Marketing Campaign"
   | "Security Recovery"
   | "Validator Recruitment"
+  | "Treasury Investment";
 
   export type GlobalEventType =
   | "AI Security Breakthrough"
