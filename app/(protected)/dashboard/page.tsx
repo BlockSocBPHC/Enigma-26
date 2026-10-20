@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import DashboardGame from "@/app/(protected)/dashboard/dashboard-game";
+import { fetchCompetitionState } from "@/app/lib/competition-state-server";
 import type { Leaderboard, TeamDetails, TeamScore } from "@/app/lib/types";
 import { createClient } from "@/utils/supabase/server";
 
@@ -66,10 +67,10 @@ export default async function DashboardPage() {
     );
   }
 
-  // Load team score
+  // Load team score and round completion state
   const { data: scoreData } = await supabase
     .from("teams")
-    .select("adoption, security, treasury, decentralization, stability")
+    .select("adoption, security, treasury, decentralization, stability, round_completed")
     .eq("name", resolvedTeamName)
     .maybeSingle();
 
@@ -87,10 +88,11 @@ export default async function DashboardPage() {
     stability: 100,
   };
 
-  // Load leaderboard
+  // Load leaderboard (excluding system records)
   const { data: leaderboardData } = await supabase
     .from("teams")
-    .select("name, adoption, security, treasury, decentralization, stability");
+    .select("name, adoption, security, treasury, decentralization, stability")
+    .neq("name", "__competition__");
 
   const leaderboard: Leaderboard[] = Array.isArray(leaderboardData)
     ? leaderboardData.map((row) => ({
@@ -103,24 +105,14 @@ export default async function DashboardPage() {
       }))
     : [];
 
-  // Determine current round (game_rounds table with cookie fallback)
+  // Load centralized competition state
+  const initialCompetition = await fetchCompetitionState();
+
+  // Determine current round from teams.round_completed (with cookie fallback)
   let initialRound = 1;
-  try {
-    const { data: gameRow, error: gameError } = await supabase
-      .from("game_rounds")
-      .select("current_round")
-      .eq("team_name", resolvedTeamName)
-      .maybeSingle();
-    if (!gameError && gameRow?.current_round) {
-      initialRound = Number(gameRow.current_round);
-    } else {
-      const cookieVal = cookieStore.get(`enigma_round_${resolvedTeamName}`)?.value;
-      if (cookieVal) {
-        const parsed = parseInt(cookieVal, 10);
-        if (!isNaN(parsed) && parsed >= 1) initialRound = parsed;
-      }
-    }
-  } catch {
+  if (scoreData && scoreData.round_completed !== undefined && scoreData.round_completed !== null) {
+    initialRound = Number(scoreData.round_completed) + 1;
+  } else {
     const cookieVal = cookieStore.get(`enigma_round_${resolvedTeamName}`)?.value;
     if (cookieVal) {
       const parsed = parseInt(cookieVal, 10);
@@ -140,6 +132,7 @@ export default async function DashboardPage() {
       initialScore={score}
       initialLeaderboard={leaderboard}
       initialRound={initialRound}
+      initialCompetition={initialCompetition}
     />
   );
 }

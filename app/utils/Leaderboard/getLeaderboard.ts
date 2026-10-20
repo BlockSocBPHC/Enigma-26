@@ -9,6 +9,7 @@ const getLeaderboard = async () => {
     const { data, error } = await supabase
         .from("teams")
         .select("adoption, security, treasury,decentralization, stability, name")
+        .neq("name", "__competition__");
     if (error) throw error;
     return data
 }

@@ -17,12 +17,15 @@ import {
 import type { AttackCategory, AttackType, GlobalEventType, RebuildType, TeamScore } from "@/app/lib/types";
 import calculateFinalTeamScore from "@/app/utils/TeamScore/calculateFinalTeamScore";
 import { createClient } from "@/utils/supabase/server";
+import { CompetitionState } from "@/app/lib/competition-state";
+import { fetchCompetitionState } from "@/app/lib/competition-state-server";
 
 type GameResult = {
   round: number;
   score: TeamScore;
   message: string;
   target?: { name: string; score: TeamScore };
+  targets?: Array<{ name: string; score: TeamScore; success: boolean }>;
   success?: boolean;
   event?: GlobalEventType;
 };
@@ -60,7 +63,19 @@ async function currentGameContext() {
 
   if (!teamName) throw new Error("No team is registered for this account (" + user.email + ").");
 
-  return { supabase, teamName, cookieStore };
+  const competition = await fetchCompetitionState();
+  if (competition.status === "not_started") {
+    throw new Error("Competition has not started yet. Waiting for administrator to launch Round 1.");
+  }
+  if (competition.status === "ended") {
+    throw new Error("Competition is over! No further moves can be submitted.");
+  }
+
+  return { supabase, teamName, cookieStore, competition };
+}
+
+export async function getLiveCompetitionState(): Promise<CompetitionState> {
+  return await fetchCompetitionState();
 }
 
 function toScore(row: TeamRow): TeamScore {
@@ -105,12 +120,12 @@ async function currentRound(
 ) {
   try {
     const { data, error } = await supabase
-      .from("game_rounds")
-      .select("current_round")
-      .eq("team_name", teamName)
+      .from("teams")
+      .select("round_completed")
+      .eq("name", teamName)
       .maybeSingle();
-    if (!error && data?.current_round) {
-      return Number(data.current_round);
+    if (!error && data && data.round_completed !== undefined && data.round_completed !== null) {
+      return Number(data.round_completed) + 1;
     }
   } catch {}
 
@@ -133,13 +148,9 @@ async function finishRound(
 
   try {
     await supabase
-      .from("game_rounds")
-      .upsert({
-        team_name: teamName,
-        current_round: nextRound,
-        last_result: { message, at: new Date().toISOString() },
-        updated_at: new Date().toISOString(),
-      });
+      .from("teams")
+      .update({ round_completed: expectedRound })
+      .eq("name", teamName);
   } catch {}
 
   cookieStore.set(`enigma_round_${teamName}`, String(nextRound), {
@@ -175,40 +186,114 @@ export async function submitLaunch(choice: unknown): Promise<GameResult> {
   return { round: nextRound, score, message };
 }
 
-export async function submitAttack(targetName: unknown, category: unknown, level: unknown): Promise<GameResult> {
-  if (typeof targetName !== "string" || !attackCategories.includes(category as AttackCategory) || !attackTypes.includes(level as AttackType)) {
-    throw new Error("Select a valid target, attack, and attack level.");
+export type AttackOrderInput = {
+  targetName: string;
+  category: AttackCategory;
+  level: AttackType;
+};
+
+export async function submitMultiAttack(orders: unknown): Promise<GameResult> {
+  if (!Array.isArray(orders) || orders.length === 0) {
+    throw new Error("Select at least one attack target.");
   }
 
   const { supabase, teamName, cookieStore } = await currentGameContext();
-  if (targetName === teamName) throw new Error("A team cannot attack itself.");
   const round = await currentRound(supabase, teamName, cookieStore);
   assertRound(round, [2, 4]);
 
-  const attack = category as AttackCategory;
-  const attackLevel = level as AttackType;
-  const attacker = await readScore(supabase, teamName);
-  const target = await readScore(supabase, targetName);
-  const { cost, strength } = ATTACK_LEVELS[attackLevel];
-  if (attacker.treasury < cost) {
-    throw new Error(`Your treasury cannot fund this attack (cost: ${cost}, available: ${attacker.treasury}).`);
+  if (round === 2 && orders.length > 1) {
+    throw new Error("Round 2 only allows attacking a single team. Multi-target attacks are unlocked in Round 4.");
   }
 
-  const def = defenseScore(target, attack);
-  const chance = successProbability(strength - def);
-  const success = Math.random() * 100 < chance;
-  const attackerAfter = applyDelta(attacker, { treasury: -cost });
-  const targetAfter = success ? applyDelta(target, ATTACK_RULES[attack].effect) : target;
+  // Validate each order
+  const targetsSeen = new Set<string>();
+  const validatedOrders: AttackOrderInput[] = [];
 
+  for (const item of orders) {
+    const o = item as Partial<AttackOrderInput>;
+    if (typeof o.targetName !== "string" || !o.targetName) {
+      throw new Error("Each strike must have a valid target selected.");
+    }
+    if (o.targetName === teamName) {
+      throw new Error("A team cannot attack itself.");
+    }
+    if (targetsSeen.has(o.targetName)) {
+      throw new Error(`Target '${o.targetName}' cannot be targeted multiple times in the same wave.`);
+    }
+    targetsSeen.add(o.targetName);
+
+    if (!attackCategories.includes(o.category as AttackCategory)) {
+      throw new Error(`Invalid attack category for target ${o.targetName}.`);
+    }
+    if (!attackTypes.includes(o.level as AttackType)) {
+      throw new Error(`Invalid attack level for target ${o.targetName}.`);
+    }
+
+    validatedOrders.push({
+      targetName: o.targetName,
+      category: o.category as AttackCategory,
+      level: o.level as AttackType,
+    });
+  }
+
+  const attacker = await readScore(supabase, teamName);
+  const totalCost = validatedOrders.reduce((sum, o) => sum + ATTACK_LEVELS[o.level].cost, 0);
+
+  if (attacker.treasury < totalCost) {
+    throw new Error(`Your treasury cannot fund all strikes (total cost: ${totalCost}, available: ${attacker.treasury}).`);
+  }
+
+  const targetResults: Array<{ name: string; score: TeamScore; success: boolean }> = [];
+  const logMessages: string[] = [];
+
+  for (const o of validatedOrders) {
+    const target = await readScore(supabase, o.targetName);
+    const { strength } = ATTACK_LEVELS[o.level];
+    const def = defenseScore(target, o.category);
+    const chance = successProbability(strength - def);
+    const success = Math.random() * 100 < chance;
+    const targetAfter = success ? applyDelta(target, ATTACK_RULES[o.category].effect) : target;
+
+    if (success) {
+      await writeScore(supabase, o.targetName, targetAfter);
+    }
+
+    targetResults.push({
+      name: o.targetName,
+      score: targetAfter,
+      success,
+    });
+
+    logMessages.push(
+      success
+        ? `💥 ${ATTACK_RULES[o.category].label} succeeded against ${o.targetName}! (${chance}% odds)`
+        : `🛡️ ${ATTACK_RULES[o.category].label} was deflected by ${o.targetName} (${chance}% odds)`
+    );
+  }
+
+  const attackerAfter = applyDelta(attacker, { treasury: -totalCost });
   await writeScore(supabase, teamName, attackerAfter);
-  if (success) await writeScore(supabase, targetName, targetAfter);
 
-  const message = success
-    ? `💥 ${ATTACK_RULES[attack].label} succeeded against ${targetName}! (${chance}% probability)`
-    : `🛡️ ${ATTACK_RULES[attack].label} was deflected by ${targetName}’s defenses (${chance}% probability). Treasury cost paid.`;
-  const nextRound = await finishRound(supabase, teamName, round, message, cookieStore);
+  const combinedMessage = logMessages.join(" | ") + ` (Total Treasury Cost: -${totalCost})`;
+  const nextRound = await finishRound(supabase, teamName, round, combinedMessage, cookieStore);
+
   revalidatePath("/dashboard");
-  return { round: nextRound, score: attackerAfter, target: { name: targetName, score: targetAfter }, success, message };
+  return {
+    round: nextRound,
+    score: attackerAfter,
+    target: targetResults[0] ? { name: targetResults[0].name, score: targetResults[0].score } : undefined,
+    targets: targetResults,
+    success: targetResults.some((t) => t.success),
+    message: combinedMessage,
+  };
+}
+
+export async function submitAttack(targetName: unknown, category: unknown, level: unknown): Promise<GameResult> {
+  return submitMultiAttack([{
+    targetName: targetName as string,
+    category: category as AttackCategory,
+    level: level as AttackType,
+  }]);
 }
 
 export async function submitRebuild(action: unknown): Promise<GameResult> {
@@ -267,20 +352,5 @@ export async function applyMarketEvent(): Promise<GameResult> {
 }
 
 export async function resetGame(): Promise<GameResult> {
-  const { supabase, teamName, cookieStore } = await currentGameContext();
-  try {
-    await supabase
-      .from("game_rounds")
-      .upsert({
-        team_name: teamName,
-        current_round: 1,
-        last_result: null,
-        updated_at: new Date().toISOString(),
-      });
-  } catch {}
-
-  cookieStore.set(`enigma_round_${teamName}`, "1", { path: "/" });
-  const score = await readScore(supabase, teamName);
-  revalidatePath("/dashboard");
-  return { round: 1, score, message: "Campaign reset to Round 1." };
+  throw new Error("Campaign restart is disabled. Each team is permitted only one playthrough.");
 }

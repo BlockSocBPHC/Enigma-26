@@ -41,17 +41,17 @@ export default async function ScoreboardPage() {
     teamMembers: resolvedMembers,
   };
 
-  // Determine current round
+  // Determine current round from teams.round_completed
   let currentRound = 1;
   if (resolvedTeamName) {
     try {
-      const { data: gameRow } = await supabase
-        .from("game_rounds")
-        .select("current_round")
-        .eq("team_name", resolvedTeamName)
+      const { data: teamRow } = await supabase
+        .from("teams")
+        .select("round_completed")
+        .eq("name", resolvedTeamName)
         .maybeSingle();
-      if (gameRow?.current_round) {
-        currentRound = Number(gameRow.current_round);
+      if (teamRow && teamRow.round_completed !== undefined && teamRow.round_completed !== null) {
+        currentRound = Number(teamRow.round_completed) + 1;
       } else {
         const cookieVal = cookieStore.get(`enigma_round_${resolvedTeamName}`)?.value;
         if (cookieVal) {
@@ -71,7 +71,8 @@ export default async function ScoreboardPage() {
   // Load all teams
   const { data: teamsData, error } = await supabase
     .from("teams")
-    .select("name, adoption, security, treasury, decentralization, stability");
+    .select("name, adoption, security, treasury, decentralization, stability")
+    .neq("name", "__competition__");
 
   if (error || !teamsData) {
     throw new Error("Unable to load scoreboard data.");

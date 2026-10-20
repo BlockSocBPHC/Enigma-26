@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 export interface NavbarProps {
     roundNumber?: number; // 1..5, 6 = final results. Omit to hide the round pill.
     roundName?: string;
+    roundTimer?: string;
     teamName: string;
     teamMembers: string[];
     links?: { id: string; label: string }[]; // sections on the page to link to
@@ -23,7 +24,7 @@ const LINKS = [
 
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#2cff5e]";
 
-export default function Navbar({ roundNumber, roundName, teamName, teamMembers, links = LINKS, userEmail, onSignOut }: NavbarProps) {
+export default function Navbar({ roundNumber, roundName, roundTimer, teamName, teamMembers, links = LINKS, userEmail, onSignOut }: NavbarProps) {
     const pathname = usePathname();
     const [menuOpen, setMenuOpen] = useState(false); // mobile links panel
     const [profileOpen, setProfileOpen] = useState(false);
@@ -152,6 +153,11 @@ export default function Navbar({ roundNumber, roundName, teamName, teamMembers, 
                             />
                             <b className="font-extrabold text-[#a8f27a]">{final ? "Final" : `R${roundNumber}`}</b>
                             <span className="hidden font-semibold text-[#f3fff0] min-[441px]:inline">{roundName}</span>
+                            {roundTimer && !final && (
+                                <span className="font-mono text-xs font-bold text-[#a8f27a] border-l border-white/20 pl-2">
+                                    ⏱️ {roundTimer}
+                                </span>
+                            )}
                         </div>
                     )}
 
