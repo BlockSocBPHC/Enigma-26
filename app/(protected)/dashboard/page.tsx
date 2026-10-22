@@ -95,14 +95,16 @@ export default async function DashboardPage() {
     .neq("name", "__competition__");
 
   const leaderboard: Leaderboard[] = Array.isArray(leaderboardData)
-    ? leaderboardData.map((row) => ({
-        name: String(row.name),
-        adoption: Number(row.adoption ?? 0),
-        security: Number(row.security ?? 0),
-        treasury: Number(row.treasury ?? 0),
-        decentralization: Number(row.decentralization ?? 0),
-        stability: Number(row.stability ?? 0),
-      }))
+    ? leaderboardData
+        .filter((row) => !String(row.name).startsWith("__"))
+        .map((row) => ({
+          name: String(row.name).trim(),
+          adoption: Number(row.adoption ?? 0),
+          security: Number(row.security ?? 0),
+          treasury: Number(row.treasury ?? 0),
+          decentralization: Number(row.decentralization ?? 0),
+          stability: Number(row.stability ?? 0),
+        }))
     : [];
 
   // Load centralized competition state
@@ -120,6 +122,40 @@ export default async function DashboardPage() {
     }
   }
 
+  // Fetch initial attack alert for this team
+  const { data: alertRow } = await supabase
+    .from("teams")
+    .select("round_completed, adoption, stability")
+    .eq("name", `__alert__${resolvedTeamName.trim()}`)
+    .maybeSingle();
+
+  const initialAlert = alertRow && alertRow.stability ? {
+    hasAlert: true,
+    round: Number(alertRow.round_completed ?? 2),
+    success: alertRow.adoption === 1,
+    timestamp: Number(alertRow.stability),
+  } : { hasAlert: false };
+
+  // Fetch permanent intercepted intelligence dossiers for this team
+  const intelPrefix = `__intel__${resolvedTeamName.trim()}__`;
+  const { data: intelRows } = await supabase
+    .from("teams")
+    .select("name, adoption, security, decentralization, treasury, stability, round_completed");
+
+  const initialIntelDossiers = (intelRows || [])
+    .filter((r) => r.name.startsWith(intelPrefix))
+    .map((r) => ({
+      targetName: r.name.replace(intelPrefix, "").trim(),
+      telemetry: {
+        adoption: Number(r.adoption ?? 0),
+        security: Number(r.security ?? 0),
+        decentralization: Number(r.decentralization ?? 0),
+        treasury: Number(r.treasury ?? 0),
+        stability: Number(r.stability ?? 0),
+      },
+      roundIntercepted: Number(r.round_completed ?? 1),
+    }));
+
   const team: TeamDetails = {
     teamName: resolvedTeamName,
     teamMembers: resolvedMembers,
@@ -133,6 +169,8 @@ export default async function DashboardPage() {
       initialLeaderboard={leaderboard}
       initialRound={initialRound}
       initialCompetition={initialCompetition}
+      initialAlert={initialAlert}
+      initialIntelDossiers={initialIntelDossiers}
     />
   );
 }

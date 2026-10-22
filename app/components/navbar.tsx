@@ -18,7 +18,6 @@ export interface NavbarProps {
 // Each id must exist on a section in the dashboard page.
 const LINKS = [
     { id: "/dashboard", label: "Dashboard" },
-    { id: "/scoreboard", label: "Scoreboard" },
     { id: "/rulebook", label: "Rulebook" },
 ];
 

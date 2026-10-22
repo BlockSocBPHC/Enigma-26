@@ -8,11 +8,9 @@ import { createClient } from "@/utils/supabase/client";
 import {
   ATTACK_LEVELS,
   ATTACK_RULES,
-  defenseScore,
   LAUNCH_RULES,
   REBUILD_RULES,
   ROUND_LABELS,
-  successProbability,
 } from "@/app/lib/game-rules";
 import type {
   AttackCategory,
@@ -24,11 +22,27 @@ import type {
   upgradeOptions,
   upgradeTypes,
 } from "@/app/lib/types";
-import { applyMarketEvent, getLiveCompetitionState, submitLaunch, submitMultiAttack, submitRebuild } from "./actions";
+import {
+  applyMarketEvent,
+  getLatestAttackAlert,
+  getLiveCompetitionState,
+  InterceptedDossier,
+  probeRandomTeamStability,
+  submitLaunch,
+  submitMultiAttack,
+  submitRebuild,
+} from "./actions";
 import { CompetitionState, formatSeconds } from "@/app/lib/competition-state";
 
 type Notice = { tone: "success" | "error"; text: string } | null;
 type GameResult = Awaited<ReturnType<typeof submitLaunch>>;
+
+export type AttackAlertState = {
+  hasAlert: boolean;
+  round?: number;
+  success?: boolean;
+  timestamp?: number;
+};
 
 export type AttackOrder = {
   id: string;
@@ -42,8 +56,6 @@ export type AttackSimItem = {
   attack: AttackCategory;
   level: AttackType;
   strength: number;
-  defense: number;
-  chance: number;
   cost: number;
 };
 
@@ -133,6 +145,8 @@ export default function DashboardGame({
   initialLeaderboard,
   initialRound,
   initialCompetition,
+  initialAlert,
+  initialIntelDossiers,
 }: {
   team: TeamDetails;
   userEmail: string;
@@ -140,6 +154,8 @@ export default function DashboardGame({
   initialLeaderboard: Leaderboard[];
   initialRound: number;
   initialCompetition: CompetitionState;
+  initialAlert?: AttackAlertState;
+  initialIntelDossiers?: InterceptedDossier[];
 }) {
   const router = useRouter();
   const [competition, setCompetition] = useState<CompetitionState>(initialCompetition);
@@ -148,6 +164,10 @@ export default function DashboardGame({
   const [round, setRound] = useState(initialRound);
   const [notice, setNotice] = useState<Notice>(null);
   const [isPending, startTransition] = useTransition();
+  const [attackAlert, setAttackAlert] = useState<AttackAlertState>(initialAlert ?? { hasAlert: false });
+  const [dismissedAlertTimestamp, setDismissedAlertTimestamp] = useState<number>(0);
+  const [intelDossiers, setIntelDossiers] = useState<InterceptedDossier[]>(initialIntelDossiers ?? []);
+  const [isProbing, setIsProbing] = useState(false);
   const [launchChoice, setLaunchChoice] = useState<Record<upgradeOptions, upgradeTypes>>({
     "Transaction Fees": "Medium",
     "Security Budget": "Medium",
@@ -163,6 +183,20 @@ export default function DashboardGame({
   ]);
 
   const timer = useCentralizedRoundTimer(competition, setCompetition);
+
+  // Poll for incoming attack alerts every 4 seconds
+  useEffect(() => {
+    const alertInterval = setInterval(async () => {
+      try {
+        const freshAlert = await getLatestAttackAlert();
+        if (freshAlert.hasAlert) {
+          setAttackAlert(freshAlert);
+        }
+      } catch {}
+    }, 4000);
+
+    return () => clearInterval(alertInterval);
+  }, []);
 
   // Resume any active attack simulation if page was refreshed
   useEffect(() => {
@@ -202,7 +236,6 @@ export default function DashboardGame({
 
   const opponents = useMemo(() => leaderboard.filter((row) => row.name !== team.teamName), [leaderboard, team.teamName]);
   const selectedTarget = opponents.find((row) => row.name === target);
-  const chance = selectedTarget ? successProbability(ATTACK_LEVELS[attackLevel].strength - defenseScore(selectedTarget, attack)) : null;
 
   function applyResult(result: GameResult) {
     setScore(result.score);
@@ -231,6 +264,26 @@ export default function DashboardGame({
     });
   }
 
+  async function handleProbeIntelligence() {
+    if (score.treasury < 2) {
+      setNotice({ tone: "error", text: `Insufficient Treasury: Intercepting rival telemetry costs 2 Treasury (available: ${score.treasury}).` });
+      return;
+    }
+    setIsProbing(true);
+    setNotice(null);
+    try {
+      const res = await probeRandomTeamStability();
+      setScore(res.score);
+      setIntelDossiers(res.dossiers);
+      setNotice({ tone: "success", text: res.message });
+      router.refresh();
+    } catch (err) {
+      setNotice({ tone: "error", text: err instanceof Error ? err.message : "Failed to intercept intelligence." });
+    } finally {
+      setIsProbing(false);
+    }
+  }
+
   function handleLaunchAttack() {
     if (round === 2) {
       if (!selectedTarget) return;
@@ -240,15 +293,12 @@ export default function DashboardGame({
         return;
       }
 
-      // eslint-disable-next-line react-hooks/purity
       const now = Date.now();
       const simItem: AttackSimItem = {
         target,
         attack,
         level: attackLevel,
         strength: ATTACK_LEVELS[attackLevel].strength,
-        defense: defenseScore(selectedTarget, attack),
-        chance: chance ?? 50,
         cost,
       };
 
@@ -284,22 +334,14 @@ export default function DashboardGame({
         return;
       }
 
-      // eslint-disable-next-line react-hooks/purity
       const now = Date.now();
-      const simItems: AttackSimItem[] = activeOrders.map((o) => {
-        const opp = opponents.find((row) => row.name === o.target);
-        const def = opp ? defenseScore(opp, o.attack) : 50;
-        const ch = successProbability(ATTACK_LEVELS[o.level].strength - def);
-        return {
-          target: o.target,
-          attack: o.attack,
-          level: o.level,
-          strength: ATTACK_LEVELS[o.level].strength,
-          defense: def,
-          chance: ch,
-          cost: ATTACK_LEVELS[o.level].cost,
-        };
-      });
+      const simItems: AttackSimItem[] = activeOrders.map((o) => ({
+        target: o.target,
+        attack: o.attack,
+        level: o.level,
+        strength: ATTACK_LEVELS[o.level].strength,
+        cost: ATTACK_LEVELS[o.level].cost,
+      }));
 
       const sim: AttackSimState = {
         attacks: simItems,
@@ -347,7 +389,6 @@ export default function DashboardGame({
           userEmail={userEmail}
           links={[
             { id: "/dashboard", label: "Dashboard" },
-            { id: "/scoreboard", label: "Scoreboard" },
             { id: "/rulebook", label: "Rulebook" },
           ]}
           onSignOut={() => { void signOut(); }}
@@ -389,12 +430,6 @@ export default function DashboardGame({
               >
                 📖 Review Rulebook
               </Link>
-              <Link
-                href="/scoreboard"
-                className="rounded-xl border border-white/20 bg-white/5 px-5 py-2.5 text-xs font-bold text-white hover:bg-white/10 transition"
-              >
-                📊 Scoreboard
-              </Link>
             </div>
 
             <div className="mt-8 flex items-center justify-center gap-2 text-xs text-[#8fae93] font-mono animate-pulse">
@@ -416,7 +451,6 @@ export default function DashboardGame({
           roundName="Competition Concluded"
           links={[
             { id: "/dashboard", label: "Dashboard" },
-            { id: "/scoreboard", label: "Scoreboard" },
             { id: "/rulebook", label: "Rulebook" },
           ]}
           onSignOut={() => { void signOut(); }}
@@ -463,12 +497,37 @@ export default function DashboardGame({
               </div>
             </div>
 
+            {intelDossiers.length > 0 && (
+              <div className="mt-8 rounded-2xl border border-amber-400/20 bg-black/40 p-5 text-left">
+                <span className="text-xs uppercase font-extrabold tracking-wider text-[#a8f27a] block mb-3">
+                  📁 Intercepted Tactical Dossiers ({intelDossiers.length})
+                </span>
+                <div className="grid gap-3">
+                  {intelDossiers.map((d) => (
+                    <div key={d.targetName} className="rounded-xl border border-white/10 bg-black/30 p-3">
+                      <div className="flex items-center justify-between pb-2 border-b border-white/5">
+                        <strong className="text-xs text-white">🎯 {d.targetName}</strong>
+                        <span className="text-[10px] text-amber-300">Round {d.roundIntercepted} Intel</span>
+                      </div>
+                      <div className="mt-2 grid grid-cols-5 gap-1.5 text-center text-[10px]">
+                        <div><span className="text-[#8fae93] block">Adoption</span><b className="text-white">{d.telemetry.adoption}</b></div>
+                        <div><span className="text-[#8fae93] block">Security</span><b className="text-white">{d.telemetry.security}</b></div>
+                        <div><span className="text-[#8fae93] block">Decentral.</span><b className="text-white">{d.telemetry.decentralization}</b></div>
+                        <div><span className="text-[#8fae93] block">Treasury</span><b className="text-[#ff8080]">{d.telemetry.treasury}</b></div>
+                        <div><span className="text-[#8fae93] block">Stability</span><b className="text-[#2cff5e]">{d.telemetry.stability}</b></div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
               <Link
-                href="/scoreboard"
-                className="rounded-xl bg-[#2cff5e] px-6 py-3 text-sm font-extrabold text-[#031006] hover:brightness-110 shadow-[0_0_20px_rgba(44,255,94,0.3)] transition"
+                href="/rulebook"
+                className="rounded-xl border border-white/20 bg-white/5 px-6 py-3 text-sm font-bold text-white transition hover:bg-white/10"
               >
-                🏆 View Final Scoreboard
+                📖 Review Campaign Rulebook
               </Link>
             </div>
           </div>
@@ -488,12 +547,41 @@ export default function DashboardGame({
         roundTimer={round <= 5 ? (timer.isExpired ? "EXPIRED" : timer.formatted) : undefined}
         links={[
           { id: "/dashboard", label: "Dashboard" },
-          { id: "/scoreboard", label: "Scoreboard" },
           { id: "/rulebook", label: "Rulebook" },
         ]}
         onSignOut={() => { void signOut(); }}
       />
       <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
+        {/* Incoming Attack Alert Banner */}
+        {attackAlert.hasAlert && (!dismissedAlertTimestamp || (attackAlert.timestamp && attackAlert.timestamp > dismissedAlertTimestamp)) && (
+          <div className="mb-6 rounded-3xl border border-red-500/50 bg-gradient-to-r from-red-950/80 via-[#26090c]/90 to-amber-950/70 p-5 shadow-2xl backdrop-blur-md animate-pulse">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-start sm:items-center gap-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-red-500/20 text-2xl text-red-400">
+                  🚨
+                </div>
+                <div>
+                  <h4 className="text-base font-black uppercase tracking-wider text-red-200">
+                    Hostile Attack Detected!
+                  </h4>
+                  <p className="mt-1 text-xs sm:text-sm text-red-300/90 leading-relaxed">
+                    {attackAlert.success
+                      ? `Your chain was targeted in Round ${attackAlert.round ?? "Strike"} and suffered a security breach! Defenses were compromised.`
+                      : `Your chain was targeted by an adversarial strike in Round ${attackAlert.round ?? "Strike"}! Your security node deflected the attack.`}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDismissedAlertTimestamp(attackAlert.timestamp ?? Date.now())}
+                className="shrink-0 rounded-xl border border-red-400/30 bg-red-500/20 px-4 py-2 text-xs font-bold text-red-200 hover:bg-red-500/30 transition self-end sm:self-auto"
+              >
+                Dismiss Alert ✕
+              </button>
+            </div>
+          </div>
+        )}
+
         <header className="rounded-3xl border border-[#2cff5e]/20 bg-[rgba(7,17,10,0.8)] p-6">
           <p className="text-xs font-bold uppercase tracking-[0.24em] text-[#a8f27a]">Blockchain economics strategy game</p>
           <div className="mt-3">
@@ -504,6 +592,88 @@ export default function DashboardGame({
 
         <section className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5" aria-label="Network metrics">
           {metrics.map((metric) => <article key={metric.key} className="rounded-2xl border border-[#2cff5e]/15 bg-[rgba(7,17,10,0.8)] p-4"><p className="text-xs font-bold uppercase tracking-wider text-[#a8f27a]">{metric.label}</p><p className="mt-2 text-2xl font-extrabold">{display(metric.key, score[metric.key])}</p><Meter metric={metric.key} value={score[metric.key]} /></article>)}
+        </section>
+
+        {/* Network Intelligence / Reconnaissance Widget */}
+        <section className="mt-5 rounded-3xl border border-amber-400/30 bg-gradient-to-r from-[rgba(24,18,6,0.85)] to-[rgba(10,18,12,0.85)] p-5 backdrop-blur-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <div className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-amber-300">
+                <span>📡</span> Network Intelligence &amp; Reconnaissance
+              </div>
+              <p className="mt-1 text-xs text-[#a8c7ac]">
+                Deploy reconnaissance drones to intercept and decrypt live telemetry (Adoption, Security, Decentralization, Treasury, Stability) of rival networks (-2 Treasury per scan). All intercepted telemetry is permanently archived in your tactical dossier.
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={isProbing || isPending || score.treasury < 2}
+              onClick={handleProbeIntelligence}
+              className="shrink-0 inline-flex items-center gap-2 rounded-xl border border-amber-400/40 bg-gradient-to-r from-amber-500/20 to-yellow-500/10 px-4 py-2.5 text-xs font-extrabold text-amber-300 hover:bg-amber-500/30 disabled:cursor-not-allowed disabled:opacity-40 transition shadow-lg"
+            >
+              <span>{isProbing ? "📡 Scanning rival frequency..." : `📡 Intercept Rival Telemetry (-2 Treasury)${intelDossiers.length > 0 ? ` (${intelDossiers.length} Probed)` : ""}`}</span>
+            </button>
+          </div>
+
+          {intelDossiers.length > 0 && (
+            <div className="mt-5 space-y-4">
+              <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                <span className="text-xs uppercase font-extrabold tracking-wider text-[#a8f27a]">
+                  📁 Intercepted Tactical Dossiers ({intelDossiers.length})
+                </span>
+                <span className="text-[11px] text-[#8fae93]">
+                  Permanent Tactical Telemetry Archive
+                </span>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                {intelDossiers.map((dossier) => (
+                  <div
+                    key={dossier.targetName}
+                    className="rounded-2xl border border-amber-400/30 bg-black/40 p-4 shadow-lg backdrop-blur-sm"
+                  >
+                    <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                      <div className="flex items-center gap-2.5">
+                        <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-amber-400/20 text-xs font-black text-amber-300">
+                          🎯
+                        </span>
+                        <div>
+                          <span className="text-[10px] uppercase font-bold text-[#8fae93] block">Target Network</span>
+                          <strong className="text-sm font-extrabold text-white">{dossier.targetName}</strong>
+                        </div>
+                      </div>
+                      <span className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-2.5 py-0.5 text-[10px] font-bold text-amber-300">
+                        {dossier.roundIntercepted ? `Round ${dossier.roundIntercepted} Telemetry` : "Decrypted Telemetry"}
+                      </span>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-5 gap-2">
+                      <div className="rounded-xl border border-white/5 bg-black/30 p-2 text-center">
+                        <span className="text-[9px] uppercase font-bold text-[#8fae93] block">Adoption</span>
+                        <span className="text-sm font-extrabold text-white">{dossier.telemetry.adoption}</span>
+                      </div>
+                      <div className="rounded-xl border border-white/5 bg-black/30 p-2 text-center">
+                        <span className="text-[9px] uppercase font-bold text-[#8fae93] block">Security</span>
+                        <span className="text-sm font-extrabold text-white">{dossier.telemetry.security}</span>
+                      </div>
+                      <div className="rounded-xl border border-white/5 bg-black/30 p-2 text-center">
+                        <span className="text-[9px] uppercase font-bold text-[#8fae93] block">Decentral.</span>
+                        <span className="text-sm font-extrabold text-white">{dossier.telemetry.decentralization}</span>
+                      </div>
+                      <div className="rounded-xl border border-white/5 bg-black/30 p-2 text-center">
+                        <span className="text-[9px] uppercase font-bold text-[#8fae93] block">Treasury</span>
+                        <span className="text-sm font-extrabold text-[#ff8080]">{dossier.telemetry.treasury}</span>
+                      </div>
+                      <div className="rounded-xl border border-white/5 bg-black/30 p-2 text-center">
+                        <span className="text-[9px] uppercase font-bold text-[#8fae93] block">Stability</span>
+                        <span className="text-sm font-extrabold text-[#2cff5e]">{dossier.telemetry.stability}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
 
         <section id="play" className="scroll-mt-24 mt-8 rounded-3xl border border-[#2cff5e]/20 bg-[rgba(7,17,10,0.8)] p-5 sm:p-7">
@@ -526,7 +696,7 @@ export default function DashboardGame({
                 )}
               </div>
             </div>
-            <ol className="grid grid-cols-5 gap-2 text-center">{["Launch", "Attack", "Rebuild", "Counterattack", "Market"].map((name, index) => <li key={name} className={cx("rounded-xl border px-2 py-2 text-[10px] font-bold uppercase", round === index + 1 && "border-[#2cff5e] bg-[#2cff5e]/15", round > index + 1 && "border-[#a8f27a]/35 text-[#a8f27a]", round < index + 1 && "border-white/10 text-[#728575]")}><span className="block text-sm">{round > index + 1 ? "✓" : index + 1}</span>{name}</li>)}</ol>
+            <ol className="grid grid-cols-5 gap-2 text-center">{["Launch", "Attack", "Rebuild", "Re-attack", "Market"].map((name, index) => <li key={name} className={cx("rounded-xl border px-2 py-2 text-[10px] font-bold uppercase", round === index + 1 && "border-[#2cff5e] bg-[#2cff5e]/15", round > index + 1 && "border-[#a8f27a]/35 text-[#a8f27a]", round < index + 1 && "border-white/10 text-[#728575]")}><span className="block text-sm">{round > index + 1 ? "✓" : index + 1}</span>{name}</li>)}</ol>
           </div>
 
           {/* Round Timer Progress Bar */}
@@ -590,8 +760,6 @@ export default function DashboardGame({
                 setAttack={setAttack}
                 level={attackLevel}
                 setLevel={setAttackLevel}
-                chance={chance}
-                defense={selectedTarget ? defenseScore(selectedTarget, attack) : null}
                 pending={isPending}
                 onSubmit={handleLaunchAttack}
               />
@@ -720,7 +888,7 @@ function AttackSimulationView({
     { at: 62, text: `Evaluating gossip protocol propagation delay and uncle block generation rate...` },
     { at: 80, text: `Simulating validator slashing conditions & mempool congestion buffer...` },
     { at: 98, text: `Cryptographic threshold signature verification under saturation...` },
-    { at: 112, text: `Consensus finality epoch reached. Resolving all strike attack probabilities...` },
+    { at: 112, text: `Consensus finality epoch reached. Resolving strike attack outcomes...` },
     { at: 119, text: `Final strike telemetry reconciled. Applying on-chain network updates...` },
   ];
 
@@ -811,8 +979,8 @@ function AttackSimulationView({
                 {ATTACK_RULES[a.attack].label} • {a.level}
               </p>
               <div className="mt-2 flex justify-between text-[10px] text-[#8fae93]">
-                <span>Def: {a.defense.toFixed(1)}</span>
-                <span className="text-[#2cff5e] font-semibold">{a.chance}% odds</span>
+                <span>Strength: {a.strength}</span>
+                <span className="text-[#ff8080] font-semibold">{a.cost} Treasury</span>
               </div>
             </div>
           ))}
@@ -907,7 +1075,7 @@ function Round4MultiAttackPhase({
       <div className="rounded-2xl border border-white/10 bg-black/20 p-5">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-4">
           <div>
-            <h3 className="text-base font-extrabold text-white">⚡ Round 4: Counterattack Wave (Multi-Target)</h3>
+            <h3 className="text-base font-extrabold text-white">⚡ Round 4: Re-attack Wave (Multi-Target)</h3>
             <p className="mt-1 text-xs text-[#a8c7ac]">
               Configure coordinated strikes against multiple rival chains. Each strike costs Treasury based on attack intensity.
             </p>
@@ -924,12 +1092,6 @@ function Round4MultiAttackPhase({
 
         <div className="mt-5 space-y-4">
           {orders.map((order, index) => {
-            const targetTeam = opponents.find((opp) => opp.name === order.target);
-            const targetDefense = targetTeam ? defenseScore(targetTeam, order.attack) : null;
-            const targetChance =
-              targetDefense !== null
-                ? successProbability(ATTACK_LEVELS[order.level].strength - targetDefense)
-                : null;
             const cost = ATTACK_LEVELS[order.level].cost;
             const otherTargets = new Set(orders.filter((o) => o.id !== order.id).map((o) => o.target));
             const isDuplicate = order.target && otherTargets.has(order.target);
@@ -1025,25 +1187,11 @@ function Round4MultiAttackPhase({
 
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/5 bg-black/40 px-3 py-2 text-xs text-[#a8c7ac]">
                   <div>
-                    Vector Defense: <span className="font-mono font-bold text-white">{targetDefense !== null ? targetDefense.toFixed(1) : "—"}</span>
+                    Vector: <span className="font-bold text-white">{ATTACK_RULES[order.attack].label}</span>
                     <span className="mx-2 text-white/20">|</span>
-                    Strength: <span className="font-mono font-bold text-white">{ATTACK_LEVELS[order.level].strength}</span>
+                    Strength: <span className="font-mono font-bold text-[#2cff5e]">{ATTACK_LEVELS[order.level].strength}</span>
                   </div>
-                  <div className="flex items-center gap-4">
-                    <span>
-                      Success Odds:{" "}
-                      <b
-                        className={cx(
-                          "font-mono",
-                          targetChance === null && "text-white",
-                          targetChance !== null && targetChance >= 75 && "text-[#2cff5e]",
-                          targetChance !== null && targetChance >= 50 && targetChance < 75 && "text-amber-400",
-                          targetChance !== null && targetChance < 50 && "text-red-400"
-                        )}
-                      >
-                        {targetChance !== null ? `${targetChance}%` : "—"}
-                      </b>
-                    </span>
+                  <div>
                     <span className="font-mono font-bold text-[#ff8080]">
                       Cost: {cost} Treasury
                     </span>
@@ -1085,7 +1233,7 @@ function Round4MultiAttackPhase({
 
         {hasDuplicates && (
           <p className="mt-3 text-xs text-red-400">
-            ⚠️ Duplicate targets detected. Each rival team can only be attacked once per counterattack wave.
+            ⚠️ Duplicate targets detected. Each rival team can only be attacked once per re-attack wave.
           </p>
         )}
         {hasEmpty && (
@@ -1111,8 +1259,6 @@ function AttackPhase({
   setAttack,
   level,
   setLevel,
-  chance,
-  defense,
   pending,
   onSubmit,
 }: {
@@ -1123,15 +1269,13 @@ function AttackPhase({
   setAttack: (value: AttackCategory) => void;
   level: AttackType;
   setLevel: (value: AttackType) => void;
-  chance: number | null;
-  defense: number | null;
   pending: boolean;
   onSubmit: () => void;
 }) {
   return (
     <div className="mt-7 grid gap-5 xl:grid-cols-[1fr_280px]">
       <div>
-        <p className="text-sm leading-6 text-[#a8c7ac]">Analyze public data, target a weak point, and fund an attack. Its treasury cost is paid whether it succeeds or fails.</p>
+        <p className="text-sm leading-6 text-[#a8c7ac]">Configure your attack vector and intensity against a rival network. The treasury cost is deducted whether the attack succeeds or is deflected.</p>
         <div className="mt-5 grid gap-4 md:grid-cols-3">
           <label className="block text-xs font-bold uppercase tracking-[0.13em] text-[#a8f27a]">Target
             <select value={target} disabled={pending} onChange={(event) => setTarget(event.target.value)} className="mt-2 w-full rounded-xl border border-white/15 bg-[#061008] px-3 py-3 text-sm text-white">
@@ -1155,18 +1299,13 @@ function AttackPhase({
         </button>
       </div>
       <aside className="rounded-2xl border border-[#a8f27a]/25 bg-[#a8f27a]/5 p-5">
-        <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#a8f27a]">Attack preview</p>
-        {chance === null || defense === null ? <p className="mt-4 text-sm leading-6 text-[#a8c7ac]">Choose a target to inspect its defense and exact success probability.</p> : (
-          <>
-            <p className="mt-3 text-4xl font-black">{chance}%</p>
-            <p className="mt-1 text-sm text-[#a8c7ac]">success probability</p>
-            <dl className="mt-5 space-y-3 text-sm">
-              <div className="flex justify-between gap-4"><dt className="text-[#8fae93]">Defense score</dt><dd className="font-bold">{defense.toFixed(1)}</dd></div>
-              <div className="flex justify-between gap-4"><dt className="text-[#8fae93]">Attack strength</dt><dd className="font-bold">{ATTACK_LEVELS[level].strength}</dd></div>
-              <div className="flex justify-between gap-4"><dt className="text-[#8fae93]">Treasury cost</dt><dd className="font-bold">{ATTACK_LEVELS[level].cost}</dd></div>
-            </dl>
-          </>
-        )}
+        <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#a8f27a]">Strike Configuration</p>
+        <dl className="mt-4 space-y-3 text-sm">
+          <div className="flex justify-between gap-4"><dt className="text-[#8fae93]">Target</dt><dd className="font-bold text-white truncate">{target || "None selected"}</dd></div>
+          <div className="flex justify-between gap-4"><dt className="text-[#8fae93]">Vector</dt><dd className="font-bold text-white">{ATTACK_RULES[attack].label}</dd></div>
+          <div className="flex justify-between gap-4"><dt className="text-[#8fae93]">Attack strength</dt><dd className="font-bold text-[#2cff5e]">{ATTACK_LEVELS[level].strength}</dd></div>
+          <div className="flex justify-between gap-4"><dt className="text-[#8fae93]">Treasury cost</dt><dd className="font-bold text-[#ff8080]">{ATTACK_LEVELS[level].cost} T</dd></div>
+        </dl>
       </aside>
     </div>
   );
@@ -1230,15 +1369,9 @@ function FinalPhase() {
       </div>
       <h3 className="mt-3 text-2xl font-extrabold">All 5 Rounds Completed!</h3>
       <p className="mt-2 text-sm leading-6 text-[#d6efd7]">
-        Your team has completed all 5 rounds. Each team is permitted exactly one campaign run. Your final network telemetry is permanently logged in the registry. Compare your network’s Adoption, Security, Decentralization, Treasury, and Stability with competitor chains on the scoreboard.
+        Your team has completed all 5 rounds. Each team is permitted exactly one campaign run. Your final network telemetry is permanently logged in the registry. Await the final announcements from the administrators.
       </p>
       <div className="mt-6 flex flex-wrap gap-4">
-        <Link
-          href="/scoreboard"
-          className="rounded-xl bg-[#2cff5e] px-5 py-3 text-sm font-extrabold text-[#031006] transition hover:brightness-110"
-        >
-          View Final Scoreboard Standings →
-        </Link>
         <Link
           href="/rulebook"
           className="rounded-xl border border-white/20 bg-white/5 px-5 py-3 text-sm font-bold text-white transition hover:bg-white/10"

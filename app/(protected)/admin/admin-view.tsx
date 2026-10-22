@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import Navbar from "@/app/components/navbar";
 import {
   AdminTeamRow,
@@ -347,7 +348,7 @@ export default function AdminView({
                     {r === 1 && "Launch"}
                     {r === 2 && "Attack"}
                     {r === 3 && "Rebuild"}
-                    {r === 4 && "Counterattack"}
+                    {r === 4 && "Re-attack"}
                     {r === 5 && "Market"}
                   </p>
                   <p className="mt-1 text-[11px] text-[#8fae93] font-mono">{durMinutes} min timer</p>
@@ -357,23 +358,33 @@ export default function AdminView({
           </div>
         </div>
 
-        {/* Teams Live Progress Monitor */}
+        {/* Scoreboard & Teams Live Progress (Sorted by Final Score) */}
         <div className="mt-8 rounded-2xl border border-white/10 bg-black/30 p-6">
           <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-4">
             <div>
-              <h3 className="text-base font-extrabold text-white">Teams Live Progress Monitor</h3>
+              <h3 className="text-base font-extrabold text-white">🏆 Official Scoreboard (Sorted by Final Score)</h3>
               <p className="mt-1 text-xs text-[#8fae93]">
-                Real-time tracking of each team&apos;s completed rounds and metric balances.
+                Real-time admin standings ranked by final score formula (0.3 Adoption + 0.3 Security + 0.2 Treasury + 0.2 Stability).
               </p>
             </div>
-            <span className="text-xs font-mono text-[#a8f27a]">{teams.length} Teams Registered</span>
+            <div className="flex items-center gap-3">
+              <Link
+                href="/scoreboard"
+                className="rounded-xl border border-[#2cff5e]/40 bg-[#2cff5e]/10 px-3.5 py-1.5 text-xs font-bold text-[#a8f27a] hover:bg-[#2cff5e]/20 transition"
+              >
+                📊 Open Scoreboard View
+              </Link>
+              <span className="text-xs font-mono text-[#a8f27a]">{teams.length} Teams Registered</span>
+            </div>
           </div>
 
           <div className="mt-4 overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead className="border-b border-white/10 text-[10px] uppercase tracking-wider text-[#8fae93]">
                 <tr>
+                  <th className="py-3 px-3">Rank</th>
                   <th className="py-3 px-3">Team Name</th>
+                  <th className="py-3 px-3 text-center">Final Score</th>
                   <th className="py-3 px-3">Rounds Done</th>
                   <th className="py-3 px-3">Status in R{state.currentRound}</th>
                   <th className="py-3 px-3 text-right">Treasury</th>
@@ -384,40 +395,50 @@ export default function AdminView({
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {teams.map((t) => {
-                  const hasDoneCurrent = t.round_completed >= state.currentRound;
-                  return (
-                    <tr key={t.id} className="hover:bg-white/[0.02] transition">
-                      <td className="py-3 px-3 font-bold text-white flex items-center gap-2">
-                        <span className="grid h-6 w-6 place-items-center rounded-full bg-[#2cff5e]/10 text-[10px] font-black text-[#2cff5e]">
-                          {t.name.charAt(0).toUpperCase()}
-                        </span>
-                        <span>{t.name}</span>
-                      </td>
-                      <td className="py-3 px-3 font-mono">
-                        <span className="rounded bg-white/10 px-2 py-0.5 font-bold text-white">
-                          {t.round_completed} / 5
-                        </span>
-                      </td>
-                      <td className="py-3 px-3">
-                        {hasDoneCurrent ? (
-                          <span className="inline-flex items-center gap-1.5 rounded-full bg-[#2cff5e]/10 px-2.5 py-0.5 text-[10px] font-bold text-[#2cff5e]">
-                            <span>✓</span> Completed
+                {[...teams]
+                  .sort((a, b) => (b.final_score ?? 0) - (a.final_score ?? 0))
+                  .map((t, idx) => {
+                    const hasDoneCurrent = t.round_completed >= state.currentRound;
+                    return (
+                      <tr key={t.id} className="hover:bg-white/[0.02] transition">
+                        <td className="py-3 px-3 font-mono font-black text-[#a8f27a]">
+                          #{idx + 1}
+                        </td>
+                        <td className="py-3 px-3 font-bold text-white flex items-center gap-2">
+                          <span className="grid h-6 w-6 place-items-center rounded-full bg-[#2cff5e]/10 text-[10px] font-black text-[#2cff5e]">
+                            {t.name.charAt(0).toUpperCase()}
                           </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-400/10 px-2.5 py-0.5 text-[10px] font-bold text-amber-300">
-                            <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" /> In Progress
+                          <span>{t.name}</span>
+                        </td>
+                        <td className="py-3 px-3 text-center font-mono">
+                          <span className="inline-block rounded-lg bg-[#2cff5e]/15 border border-[#2cff5e]/30 px-2.5 py-0.5 text-xs font-black text-[#2cff5e]">
+                            {t.final_score !== null && t.final_score !== undefined ? t.final_score.toFixed(1) : "—"}
                           </span>
-                        )}
-                      </td>
-                      <td className="py-3 px-3 text-right font-mono font-bold text-[#ff8080]">{t.treasury}</td>
-                      <td className="py-3 px-3 text-right font-mono text-[#a8c7ac]">{t.security}</td>
-                      <td className="py-3 px-3 text-right font-mono text-[#a8c7ac]">{t.adoption}</td>
-                      <td className="py-3 px-3 text-right font-mono text-[#a8c7ac]">{t.stability}</td>
-                      <td className="py-3 px-3 text-right font-mono text-[#a8c7ac]">{t.decentralization}</td>
-                    </tr>
-                  );
-                })}
+                        </td>
+                        <td className="py-3 px-3 font-mono">
+                          <span className="rounded bg-white/10 px-2 py-0.5 font-bold text-white">
+                            {t.round_completed} / 5
+                          </span>
+                        </td>
+                        <td className="py-3 px-3">
+                          {hasDoneCurrent ? (
+                            <span className="inline-flex items-center gap-1.5 rounded-full bg-[#2cff5e]/10 px-2.5 py-0.5 text-[10px] font-bold text-[#2cff5e]">
+                              <span>✓</span> Completed
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-400/10 px-2.5 py-0.5 text-[10px] font-bold text-amber-300">
+                              <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" /> In Progress
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono font-bold text-[#ff8080]">{t.treasury}</td>
+                        <td className="py-3 px-3 text-right font-mono text-[#a8c7ac]">{t.security}</td>
+                        <td className="py-3 px-3 text-right font-mono text-[#a8c7ac]">{t.adoption}</td>
+                        <td className="py-3 px-3 text-right font-mono text-[#a8c7ac]">{t.stability}</td>
+                        <td className="py-3 px-3 text-right font-mono text-[#a8c7ac]">{t.decentralization}</td>
+                      </tr>
+                    );
+                  })}
               </tbody>
             </table>
           </div>

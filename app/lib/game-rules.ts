@@ -24,7 +24,7 @@ export const ROUND_LABELS = [
   "Launch",
   "Attack",
   "Rebuild",
-  "Counterattack",
+  "Re-attack",
   "Global market",
   "Final results",
 ] as const;

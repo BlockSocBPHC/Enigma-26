@@ -9,6 +9,7 @@ import {
   ROUND_DURATIONS,
 } from "@/app/lib/competition-state";
 import { fetchCompetitionState } from "@/app/lib/competition-state-server";
+import calculateFinalTeamScore from "@/app/utils/TeamScore/calculateFinalTeamScore";
 
 export type AdminTeamRow = {
   id: string;
@@ -63,11 +64,34 @@ export async function getAdminCompetitionData(): Promise<{
     .from("teams")
     .select("id, name, adoption, security, decentralization, treasury, stability, round_completed, final_score")
     .neq("name", "__competition__")
-    .order("name", { ascending: true });
+    .order("final_score", { ascending: false });
+
+  const sortedTeams = (teamsData ?? [])
+    .filter((t) => !t.name.startsWith("__"))
+    .map((t) => {
+      const adoption = Number(t.adoption ?? 0);
+      const security = Number(t.security ?? 0);
+      const decentralization = Number(t.decentralization ?? 0);
+      const treasury = Number(t.treasury ?? 0);
+      const stability = Number(t.stability ?? 0);
+      const computedFinal = calculateFinalTeamScore(
+        adoption,
+        security,
+        decentralization,
+        treasury,
+        stability
+      );
+      return {
+        ...t,
+        name: String(t.name).trim(),
+        final_score: Number(t.final_score ?? computedFinal),
+      };
+    })
+    .sort((a, b) => (b.final_score ?? 0) - (a.final_score ?? 0));
 
   return {
     state,
-    teams: (teamsData ?? []) as AdminTeamRow[],
+    teams: sortedTeams as AdminTeamRow[],
   };
 }
 
@@ -242,11 +266,22 @@ export async function resetCompetitionAction(resetTeamsProgress = false): Promis
 
   if (error) throw new Error(error.message);
 
+  // Clean up all attack alerts and intelligence records from previous game
+  const { data: alertRows } = await supabase.from("teams").select("id, name");
+  const systemRowIds = (alertRows ?? [])
+    .filter((r) => r.name.startsWith("__alert__") || r.name.startsWith("__intel__"))
+    .map((r) => r.id);
+  if (systemRowIds.length > 0) {
+    await supabase.from("teams").delete().in("id", systemRowIds);
+  }
+
   if (resetTeamsProgress) {
-    await supabase
-      .from("teams")
-      .update({ round_completed: 0 })
-      .neq("name", "__competition__");
+    const realIds = (alertRows ?? [])
+      .filter((t) => !t.name.startsWith("__"))
+      .map((t) => t.id);
+    if (realIds.length > 0) {
+      await supabase.from("teams").update({ round_completed: 0 }).in("id", realIds);
+    }
   }
 
   revalidatePath("/dashboard");
