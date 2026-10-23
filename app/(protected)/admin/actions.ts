@@ -266,10 +266,10 @@ export async function resetCompetitionAction(resetTeamsProgress = false): Promis
 
   if (error) throw new Error(error.message);
 
-  // Clean up all attack alerts and intelligence records from previous game
+  // Clean up all attack alerts, intelligence records, and round history from previous game
   const { data: alertRows } = await supabase.from("teams").select("id, name");
   const systemRowIds = (alertRows ?? [])
-    .filter((r) => r.name.startsWith("__alert__") || r.name.startsWith("__intel__"))
+    .filter((r) => r.name.startsWith("__alert__") || r.name.startsWith("__intel__") || r.name.startsWith("__history__"))
     .map((r) => r.id);
   if (systemRowIds.length > 0) {
     await supabase.from("teams").delete().in("id", systemRowIds);

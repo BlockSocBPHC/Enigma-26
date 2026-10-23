@@ -169,7 +169,8 @@ async function finishRound(
   teamName: string,
   expectedRound: number,
   message: string,
-  cookieStore: Awaited<ReturnType<typeof cookies>>
+  cookieStore: Awaited<ReturnType<typeof cookies>>,
+  roundScore?: TeamScore
 ) {
   const cleanName = teamName.trim();
   const nextRound = expectedRound + 1;
@@ -180,6 +181,24 @@ async function finishRound(
       .update({ round_completed: expectedRound })
       .ilike("name", `${cleanName}%`);
   } catch {}
+
+  // Save round telemetry snapshot to teams table so users can revisit round scores
+  if (roundScore) {
+    try {
+      await supabase.from("teams").upsert(
+        {
+          name: `__history__${cleanName}__r${expectedRound}`,
+          adoption: roundScore.adoption,
+          security: roundScore.security,
+          decentralization: roundScore.decentralization,
+          treasury: roundScore.treasury,
+          stability: roundScore.stability,
+          round_completed: expectedRound,
+        },
+        { onConflict: "name" }
+      );
+    } catch {}
+  }
 
   cookieStore.set(`enigma_round_${cleanName}`, String(nextRound), {
     path: "/",
@@ -209,7 +228,7 @@ export async function submitLaunch(choice: unknown): Promise<GameResult> {
   const score = applyDelta(before, change);
   await writeScore(supabase, teamName, score);
   const message = "Launch strategy committed. Competitors can now see your network’s profile.";
-  const nextRound = await finishRound(supabase, teamName, 1, message, cookieStore);
+  const nextRound = await finishRound(supabase, teamName, 1, message, cookieStore, score);
   revalidatePath("/dashboard");
   return { round: nextRound, score, message };
 }
@@ -220,21 +239,29 @@ export type AttackOrderInput = {
   level: AttackType;
 };
 
-export async function submitMultiAttack(orders: unknown): Promise<GameResult> {
-  if (!Array.isArray(orders) || orders.length === 0) {
-    throw new Error("Select at least one attack target.");
-  }
-
+export async function submitSkipAttack(): Promise<GameResult> {
   const { supabase, teamName, cookieStore } = await currentGameContext();
   const round = await currentRound(supabase, teamName, cookieStore);
   assertRound(round, [2, 4]);
 
-  if (round === 2 && orders.length > 1) {
-    throw new Error("Round 2 only allows attacking a single team. Multi-target attacks are unlocked in Round 4.");
+  const current = await readScore(supabase, teamName);
+  const message = `🕊️ Chose peace and stood down in Round ${round}. Treasury conserved (+0 Cost).`;
+  const nextRound = await finishRound(supabase, teamName, round, message, cookieStore, current);
+  revalidatePath("/dashboard");
+  return { round: nextRound, score: current, message };
+}
+
+export async function submitMultiAttack(orders: unknown): Promise<GameResult> {
+  const { supabase, teamName, cookieStore } = await currentGameContext();
+  const round = await currentRound(supabase, teamName, cookieStore);
+  assertRound(round, [2, 4]);
+
+  // If empty or non-array, support choosing not to attack
+  if (!Array.isArray(orders) || orders.length === 0) {
+    return submitSkipAttack();
   }
 
-  // Validate each order
-  const targetsSeen = new Set<string>();
+  // Validate each order (allowing multiple attacks to the same person)
   const validatedOrders: AttackOrderInput[] = [];
 
   for (const item of orders) {
@@ -246,10 +273,6 @@ export async function submitMultiAttack(orders: unknown): Promise<GameResult> {
     if (cleanTarget.toLowerCase() === teamName.toLowerCase()) {
       throw new Error("A team cannot attack itself.");
     }
-    if (targetsSeen.has(cleanTarget.toLowerCase())) {
-      throw new Error(`Target '${cleanTarget}' cannot be targeted multiple times in the same wave.`);
-    }
-    targetsSeen.add(cleanTarget.toLowerCase());
 
     if (!attackCategories.includes(o.category as AttackCategory)) {
       throw new Error(`Invalid attack category for target ${cleanTarget}.`);
@@ -319,7 +342,7 @@ export async function submitMultiAttack(orders: unknown): Promise<GameResult> {
   await writeScore(supabase, teamName, attackerAfter);
 
   const combinedMessage = logMessages.join(" | ") + ` (Total Treasury Cost: -${totalCost})`;
-  const nextRound = await finishRound(supabase, teamName, round, combinedMessage, cookieStore);
+  const nextRound = await finishRound(supabase, teamName, round, combinedMessage, cookieStore, attackerAfter);
 
   revalidatePath("/dashboard");
   return {
@@ -355,7 +378,7 @@ export async function submitRebuild(action: unknown): Promise<GameResult> {
   const score = applyDelta(current, { ...rule.effect, treasury: -rule.cost });
   await writeScore(supabase, teamName, score);
   const message = `Rebuild action completed: ${rule.description} (-${rule.cost} Treasury).`;
-  const nextRound = await finishRound(supabase, teamName, 3, message, cookieStore);
+  const nextRound = await finishRound(supabase, teamName, 3, message, cookieStore, score);
   revalidatePath("/dashboard");
   return { round: nextRound, score, message };
 }
@@ -372,7 +395,7 @@ export async function applyMarketEvent(): Promise<GameResult> {
   const score = applyDelta(current, event.effect);
   await writeScore(supabase, teamName, score);
   const message = `Market event '${eventKey}' occurred: ${event.description}`;
-  const nextRound = await finishRound(supabase, teamName, 5, message, cookieStore);
+  const nextRound = await finishRound(supabase, teamName, 5, message, cookieStore, score);
   revalidatePath("/dashboard");
   return { round: nextRound, score, message, event: eventKey };
 }
@@ -560,4 +583,33 @@ export async function getLatestAttackAlert(): Promise<{
   } catch {}
 
   return { hasAlert: false };
+}
+
+export async function getTeamRoundHistory(): Promise<Record<number, TeamScore>> {
+  try {
+    const { supabase, teamName } = await currentGameContext();
+    const historyPrefix = `__history__${teamName.trim()}__r`;
+    const { data: rows } = await supabase
+      .from("teams")
+      .select("name, adoption, security, decentralization, treasury, stability, round_completed");
+
+    const history: Record<number, TeamScore> = {};
+    for (const r of rows || []) {
+      if (r.name.startsWith(historyPrefix)) {
+        const roundNum = Number(r.round_completed ?? r.name.replace(historyPrefix, ""));
+        if (!isNaN(roundNum)) {
+          history[roundNum] = {
+            adoption: Number(r.adoption ?? 0),
+            security: Number(r.security ?? 0),
+            decentralization: Number(r.decentralization ?? 0),
+            treasury: Number(r.treasury ?? 0),
+            stability: Number(r.stability ?? 0),
+          };
+        }
+      }
+    }
+    return history;
+  } catch {
+    return {};
+  }
 }

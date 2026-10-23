@@ -13,11 +13,11 @@ export type ScoreDelta = Partial<TeamScore>;
 export type LaunchChoice = Record<upgradeOptions, upgradeTypes>;
 
 export const INITIAL_SCORE: TeamScore = {
-  adoption: 50,
-  security: 50,
-  decentralization: 50,
-  treasury: 1000,
-  stability: 50,
+  adoption: 100,
+  security: 100,
+  decentralization: 100,
+  treasury: 100,
+  stability: 100,
 };
 
 export const ROUND_LABELS = [

@@ -138,11 +138,12 @@ export default async function DashboardPage() {
 
   // Fetch permanent intercepted intelligence dossiers for this team
   const intelPrefix = `__intel__${resolvedTeamName.trim()}__`;
-  const { data: intelRows } = await supabase
+  const historyPrefix = `__history__${resolvedTeamName.trim()}__r`;
+  const { data: teamRows } = await supabase
     .from("teams")
     .select("name, adoption, security, decentralization, treasury, stability, round_completed");
 
-  const initialIntelDossiers = (intelRows || [])
+  const initialIntelDossiers = (teamRows || [])
     .filter((r) => r.name.startsWith(intelPrefix))
     .map((r) => ({
       targetName: r.name.replace(intelPrefix, "").trim(),
@@ -155,6 +156,31 @@ export default async function DashboardPage() {
       },
       roundIntercepted: Number(r.round_completed ?? 1),
     }));
+
+  const initialRoundHistory: Record<number, TeamScore> = {
+    0: {
+      adoption: 100,
+      security: 100,
+      decentralization: 100,
+      treasury: 100,
+      stability: 100,
+    },
+  };
+
+  (teamRows || []).forEach((r) => {
+    if (r.name.startsWith(historyPrefix)) {
+      const roundNum = Number(r.round_completed ?? r.name.replace(historyPrefix, ""));
+      if (!isNaN(roundNum)) {
+        initialRoundHistory[roundNum] = {
+          adoption: Number(r.adoption ?? 0),
+          security: Number(r.security ?? 0),
+          decentralization: Number(r.decentralization ?? 0),
+          treasury: Number(r.treasury ?? 0),
+          stability: Number(r.stability ?? 0),
+        };
+      }
+    }
+  });
 
   const team: TeamDetails = {
     teamName: resolvedTeamName,
@@ -171,6 +197,7 @@ export default async function DashboardPage() {
       initialCompetition={initialCompetition}
       initialAlert={initialAlert}
       initialIntelDossiers={initialIntelDossiers}
+      initialRoundHistory={initialRoundHistory}
     />
   );
 }

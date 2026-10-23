@@ -10,7 +10,7 @@ export interface CompetitionState {
 }
 
 export const ROUND_DURATIONS: Record<number, number> = {
-  1: 10 * 60, // 10 min
+  1: 5 * 60,  // 5 min
   2: 10 * 60, // 10 min
   3: 5 * 60,  // 5 min
   4: 20 * 60, // 20 min

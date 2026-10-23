@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Navbar from "@/app/components/navbar";
@@ -31,6 +31,7 @@ import {
   submitLaunch,
   submitMultiAttack,
   submitRebuild,
+  submitSkipAttack,
 } from "./actions";
 import { CompetitionState, formatSeconds } from "@/app/lib/competition-state";
 
@@ -147,6 +148,7 @@ export default function DashboardGame({
   initialCompetition,
   initialAlert,
   initialIntelDossiers,
+  initialRoundHistory,
 }: {
   team: TeamDetails;
   userEmail: string;
@@ -156,6 +158,7 @@ export default function DashboardGame({
   initialCompetition: CompetitionState;
   initialAlert?: AttackAlertState;
   initialIntelDossiers?: InterceptedDossier[];
+  initialRoundHistory?: Record<number, TeamScore>;
 }) {
   const router = useRouter();
   const [competition, setCompetition] = useState<CompetitionState>(initialCompetition);
@@ -168,16 +171,25 @@ export default function DashboardGame({
   const [dismissedAlertTimestamp, setDismissedAlertTimestamp] = useState<number>(0);
   const [intelDossiers, setIntelDossiers] = useState<InterceptedDossier[]>(initialIntelDossiers ?? []);
   const [isProbing, setIsProbing] = useState(false);
+  const [roundHistory, setRoundHistory] = useState<Record<number, TeamScore>>(() => {
+    return {
+      0: { adoption: 100, security: 100, decentralization: 100, treasury: 100, stability: 100 },
+      ...(initialRoundHistory ?? {}),
+    };
+  });
+  const [selectedViewRound, setSelectedViewRound] = useState<number | null>(null);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [showSkipConfirm, setShowSkipConfirm] = useState(false);
   const [launchChoice, setLaunchChoice] = useState<Record<upgradeOptions, upgradeTypes>>({
     "Transaction Fees": "Medium",
     "Security Budget": "Medium",
     "Validator Rewards": "Medium",
   });
-  const [target, setTarget] = useState("");
-  const [attack, setAttack] = useState<AttackCategory>("Spam Attack");
-  const [attackLevel, setAttackLevel] = useState<AttackType>("Standard Attack");
   const [rebuild, setRebuild] = useState<RebuildType | "Treasury Investment">("Security Recovery");
   const [attackSim, setAttackSim] = useState<AttackSimState | null>(null);
+  const [round2Orders, setRound2Orders] = useState<AttackOrder[]>([
+    { id: "1", target: "", attack: "Spam Attack", level: "Standard Attack" },
+  ]);
   const [round4Orders, setRound4Orders] = useState<AttackOrder[]>([
     { id: "1", target: "", attack: "Spam Attack", level: "Standard Attack" },
   ]);
@@ -235,11 +247,35 @@ export default function DashboardGame({
   }, [team.teamName]);
 
   const opponents = useMemo(() => leaderboard.filter((row) => row.name !== team.teamName), [leaderboard, team.teamName]);
-  const selectedTarget = opponents.find((row) => row.name === target);
+
+  // Load any previously saved round history from localStorage on client mount
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const saved = localStorage.getItem(`enigma_history_${team.teamName}`);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === "object") {
+          setRoundHistory((prev) => ({ ...parsed, ...prev }));
+        }
+      }
+    } catch {}
+  }, [team.teamName]);
 
   function applyResult(result: GameResult) {
+    const completedRound = round;
     setScore(result.score);
     setRound(result.round);
+    setRoundHistory((prev) => {
+      const updated = { ...prev, [completedRound]: result.score };
+      if (typeof window !== "undefined") {
+        try {
+          localStorage.setItem(`enigma_history_${team.teamName}`, JSON.stringify(updated));
+        } catch {}
+      }
+      return updated;
+    });
+    setSelectedViewRound(null);
     setLeaderboard((rows) => rows.map((row) => {
       if (row.name === team.teamName) return { ...row, ...result.score };
       if (result.target && row.name === result.target.name) return { ...row, ...result.target.score };
@@ -285,74 +321,37 @@ export default function DashboardGame({
   }
 
   function handleLaunchAttack() {
-    if (round === 2) {
-      if (!selectedTarget) return;
-      const cost = ATTACK_LEVELS[attackLevel].cost;
-      if (score.treasury < cost) {
-        setNotice({ tone: "error", text: `Your treasury cannot fund this attack (cost: ${cost}, available: ${score.treasury}).` });
-        return;
-      }
+    const currentOrders = round === 2 ? round2Orders : round4Orders;
+    const activeOrders = currentOrders.filter((o) => Boolean(o.target));
+    if (activeOrders.length === 0) {
+      setNotice({ tone: "error", text: "Select at least one target rival, or choose 'Stand Down (Do Not Attack)'." });
+      return;
+    }
 
-      const now = Date.now();
-      const simItem: AttackSimItem = {
-        target,
-        attack,
-        level: attackLevel,
-        strength: ATTACK_LEVELS[attackLevel].strength,
-        cost,
-      };
+    const totalCost = activeOrders.reduce((sum, o) => sum + ATTACK_LEVELS[o.level].cost, 0);
+    if (score.treasury < totalCost) {
+      setNotice({ tone: "error", text: `Your treasury cannot fund all selected strikes (total cost: ${totalCost}, available: ${score.treasury}).` });
+      return;
+    }
 
-      const sim: AttackSimState = {
-        attacks: [simItem],
-        startedAt: now,
-        duration: 120, // 120 seconds
-      };
+    const now = Date.now();
+    const simItems: AttackSimItem[] = activeOrders.map((o) => ({
+      target: o.target,
+      attack: o.attack,
+      level: o.level,
+      strength: ATTACK_LEVELS[o.level].strength,
+      cost: ATTACK_LEVELS[o.level].cost,
+    }));
 
-      setAttackSim(sim);
-      if (typeof window !== "undefined") {
-        localStorage.setItem(`enigma_attack_sim_${team.teamName}`, JSON.stringify(sim));
-      }
-    } else if (round === 4) {
-      const activeOrders = round4Orders.filter((o) => Boolean(o.target));
-      if (activeOrders.length === 0) {
-        setNotice({ tone: "error", text: "Select at least one target team to attack." });
-        return;
-      }
+    const sim: AttackSimState = {
+      attacks: simItems,
+      startedAt: now,
+      duration: 120, // 120 seconds
+    };
 
-      const targetsSet = new Set<string>();
-      for (const o of activeOrders) {
-        if (targetsSet.has(o.target)) {
-          setNotice({ tone: "error", text: `Target '${o.target}' is targeted more than once. Each target can only be attacked once in this wave.` });
-          return;
-        }
-        targetsSet.add(o.target);
-      }
-
-      const totalCost = activeOrders.reduce((sum, o) => sum + ATTACK_LEVELS[o.level].cost, 0);
-      if (score.treasury < totalCost) {
-        setNotice({ tone: "error", text: `Your treasury cannot fund all selected strikes (total cost: ${totalCost}, available: ${score.treasury}).` });
-        return;
-      }
-
-      const now = Date.now();
-      const simItems: AttackSimItem[] = activeOrders.map((o) => ({
-        target: o.target,
-        attack: o.attack,
-        level: o.level,
-        strength: ATTACK_LEVELS[o.level].strength,
-        cost: ATTACK_LEVELS[o.level].cost,
-      }));
-
-      const sim: AttackSimState = {
-        attacks: simItems,
-        startedAt: now,
-        duration: 120, // 120 seconds
-      };
-
-      setAttackSim(sim);
-      if (typeof window !== "undefined") {
-        localStorage.setItem(`enigma_attack_sim_${team.teamName}`, JSON.stringify(sim));
-      }
+    setAttackSim(sim);
+    if (typeof window !== "undefined") {
+      localStorage.setItem(`enigma_attack_sim_${team.teamName}`, JSON.stringify(sim));
     }
   }
 
@@ -552,32 +551,180 @@ export default function DashboardGame({
         onSignOut={() => { void signOut(); }}
       />
       <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
-        {/* Incoming Attack Alert Banner */}
+        {/* Critical Incoming Attack Alert Popup Modal */}
         {attackAlert.hasAlert && (!dismissedAlertTimestamp || (attackAlert.timestamp && attackAlert.timestamp > dismissedAlertTimestamp)) && (
-          <div className="mb-6 rounded-3xl border border-red-500/50 bg-gradient-to-r from-red-950/80 via-[#26090c]/90 to-amber-950/70 p-5 shadow-2xl backdrop-blur-md animate-pulse">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="flex items-start sm:items-center gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-red-500/20 text-2xl text-red-400">
-                  🚨
-                </div>
-                <div>
-                  <h4 className="text-base font-black uppercase tracking-wider text-red-200">
-                    Hostile Attack Detected!
-                  </h4>
-                  <p className="mt-1 text-xs sm:text-sm text-red-300/90 leading-relaxed">
-                    {attackAlert.success
-                      ? `Your chain was targeted in Round ${attackAlert.round ?? "Strike"} and suffered a security breach! Defenses were compromised.`
-                      : `Your chain was targeted by an adversarial strike in Round ${attackAlert.round ?? "Strike"}! Your security node deflected the attack.`}
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md animate-in fade-in duration-200">
+            <div className="relative w-full max-w-lg rounded-3xl border-2 border-red-500 bg-gradient-to-b from-[#240608] via-[#160405] to-[#0a0203] p-6 sm:p-8 text-center shadow-[0_0_60px_rgba(239,68,68,0.5)]">
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl border-2 border-red-500/60 bg-red-500/25 text-3xl text-red-400 animate-pulse">
+                🚨
+              </div>
+              <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-red-500/40 bg-red-500/20 px-3.5 py-1 text-xs font-black uppercase tracking-widest text-red-300">
+                <span className="h-2 w-2 rounded-full bg-red-500 animate-ping" />
+                Hostile Attack Alert
+              </div>
+              <h3 className="mt-3 text-2xl font-black uppercase tracking-wide text-white">
+                Adversarial Strike Detected!
+              </h3>
+              <div className="mt-4 rounded-2xl border border-red-500/30 bg-black/60 p-4 text-left">
+                <p className="text-sm leading-relaxed text-red-200">
+                  {attackAlert.success
+                    ? `⚠️ Critical Security Breach: Your chain was targeted in Round ${attackAlert.round ?? "Strike"} and suffered a security breach! Defenses were compromised and your telemetry was degraded.`
+                    : `🛡️ Defense Node Success: Your chain was targeted by an adversarial strike in Round ${attackAlert.round ?? "Strike"}! Your security node deflected the attack.`}
+                </p>
+                {attackAlert.timestamp && (
+                  <p className="mt-3 border-t border-white/10 pt-2 text-[11px] font-mono text-[#8fae93]">
+                    Intercepted at: {new Date(attackAlert.timestamp * 1000).toLocaleTimeString()}
                   </p>
-                </div>
+                )}
               </div>
               <button
                 type="button"
                 onClick={() => setDismissedAlertTimestamp(attackAlert.timestamp ?? Date.now())}
-                className="shrink-0 rounded-xl border border-red-400/30 bg-red-500/20 px-4 py-2 text-xs font-bold text-red-200 hover:bg-red-500/30 transition self-end sm:self-auto"
+                className="mt-6 w-full rounded-xl bg-gradient-to-r from-red-600 to-amber-600 py-3.5 text-sm font-black uppercase tracking-wider text-white shadow-lg transition hover:brightness-110 active:scale-[0.98]"
               >
-                Dismiss Alert ✕
+                Acknowledge &amp; Dismiss Alert ✕
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* Stand Down / Do Not Attack Confirmation Modal */}
+        {showSkipConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md animate-in fade-in duration-200">
+            <div className="relative w-full max-w-md rounded-3xl border border-emerald-500/40 bg-gradient-to-b from-[#081a0e] via-[#040e07] to-[#020603] p-6 text-center shadow-[0_0_50px_rgba(44,255,94,0.2)]">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-emerald-500/30 bg-emerald-500/20 text-3xl text-emerald-400">
+                🕊️
+              </div>
+              <h3 className="mt-4 text-xl font-black text-white">Confirm Stand Down</h3>
+              <p className="mt-2 text-xs leading-relaxed text-[#a8c7ac]">
+                Are you sure your team wants to hold fire and <b>not launch any attacks</b> in Round {round}?
+                Your treasury will be 100% preserved (+0 Cost) and you will advance directly to Round {round + 1}.
+              </p>
+              <div className="mt-6 flex flex-col gap-2.5">
+                <button
+                  type="button"
+                  disabled={isPending}
+                  onClick={() => {
+                    setShowSkipConfirm(false);
+                    run(() => submitSkipAttack());
+                  }}
+                  className="w-full rounded-xl bg-[#2cff5e] py-3 text-sm font-extrabold text-[#031006] transition hover:brightness-110 disabled:opacity-50"
+                >
+                  {isPending ? "Processing Stand Down…" : "Yes, Stand Down (Conserve Treasury)"}
+                </button>
+                <button
+                  type="button"
+                  disabled={isPending}
+                  onClick={() => setShowSkipConfirm(false)}
+                  className="w-full rounded-xl border border-white/20 bg-white/5 py-2.5 text-xs font-bold text-white transition hover:bg-white/10"
+                >
+                  Cancel &amp; Return to Attacks
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Campaign Round Score Matrix Modal */}
+        {showHistoryModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md animate-in fade-in duration-200">
+            <div className="relative w-full max-w-3xl rounded-3xl border border-[#2cff5e]/30 bg-[rgba(7,17,10,0.95)] p-6 sm:p-8 shadow-2xl backdrop-blur-xl max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center justify-between border-b border-white/10 pb-4">
+                <div className="flex items-center gap-3">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#2cff5e]/20 text-xl font-black text-[#2cff5e]">
+                    📊
+                  </span>
+                  <div>
+                    <h3 className="text-xl font-extrabold text-white">{team.teamName} · Score Trajectory</h3>
+                    <p className="text-xs text-[#a8c7ac]">Comparison of telemetry across all campaign rounds</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowHistoryModal(false)}
+                  className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-bold text-[#c9a6a8] hover:text-white"
+                >
+                  ✕ Close
+                </button>
+              </div>
+
+              <div className="mt-5 overflow-x-auto">
+                <table className="w-full min-w-[560px] text-left text-xs">
+                  <thead className="border-b border-white/10 text-[10px] font-bold uppercase text-[#a8f27a]">
+                    <tr>
+                      <th className="py-2.5 px-3">Round</th>
+                      <th className="py-2.5 px-3">Phase</th>
+                      <th className="py-2.5 px-3 text-right">Adoption</th>
+                      <th className="py-2.5 px-3 text-right">Security</th>
+                      <th className="py-2.5 px-3 text-right">Decentral.</th>
+                      <th className="py-2.5 px-3 text-right">Treasury</th>
+                      <th className="py-2.5 px-3 text-right">Stability</th>
+                      <th className="py-2.5 px-3 text-center">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {[
+                      { r: 0, label: "Genesis", name: "Initial State" },
+                      { r: 1, label: "Round 1", name: "Launch" },
+                      { r: 2, label: "Round 2", name: "Attack" },
+                      { r: 3, label: "Round 3", name: "Rebuild" },
+                      { r: 4, label: "Round 4", name: "Re-attack" },
+                      { r: 5, label: "Round 5", name: "Market" },
+                    ].map(({ r, label, name }) => {
+                      const snap = roundHistory[r];
+                      const isAvail = Boolean(snap);
+                      return (
+                        <tr key={r} className={cx(selectedViewRound === r ? "bg-[#2cff5e]/15 font-bold" : "hover:bg-white/[0.02]")}>
+                          <td className="py-3 px-3 font-mono font-bold text-white">{label}</td>
+                          <td className="py-3 px-3 text-[#a8c7ac]">{name}</td>
+                          <td className="py-3 px-3 text-right font-mono text-white">{isAvail ? snap.adoption : "—"}</td>
+                          <td className="py-3 px-3 text-right font-mono text-white">{isAvail ? snap.security : "—"}</td>
+                          <td className="py-3 px-3 text-right font-mono text-white">{isAvail ? snap.decentralization : "—"}</td>
+                          <td className="py-3 px-3 text-right font-mono text-[#ff8080]">{isAvail ? snap.treasury : "—"}</td>
+                          <td className="py-3 px-3 text-right font-mono text-[#2cff5e]">{isAvail ? snap.stability : "—"}</td>
+                          <td className="py-3 px-3 text-center">
+                            {isAvail ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedViewRound(r);
+                                  setShowHistoryModal(false);
+                                }}
+                                className="rounded-lg border border-[#2cff5e]/40 bg-[#2cff5e]/10 px-2.5 py-1 text-[10px] font-bold text-[#a8f27a] hover:bg-[#2cff5e]/20"
+                              >
+                                View Snapshot
+                              </button>
+                            ) : (
+                              <span className="text-[10px] text-white/20">Not reached</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    <tr className="bg-white/[0.04] font-bold">
+                      <td className="py-3 px-3 text-[#2cff5e] font-mono">Live Current</td>
+                      <td className="py-3 px-3 text-white">Active State</td>
+                      <td className="py-3 px-3 text-right font-mono text-white">{score.adoption}</td>
+                      <td className="py-3 px-3 text-right font-mono text-white">{score.security}</td>
+                      <td className="py-3 px-3 text-right font-mono text-white">{score.decentralization}</td>
+                      <td className="py-3 px-3 text-right font-mono text-[#ff8080]">{score.treasury}</td>
+                      <td className="py-3 px-3 text-right font-mono text-[#2cff5e]">{score.stability}</td>
+                      <td className="py-3 px-3 text-center">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedViewRound(null);
+                            setShowHistoryModal(false);
+                          }}
+                          className="rounded-lg bg-[#2cff5e] px-2.5 py-1 text-[10px] font-extrabold text-[#031006]"
+                        >
+                          View Live
+                        </button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
@@ -590,9 +737,132 @@ export default function DashboardGame({
           </div>
         </header>
 
-        <section className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5" aria-label="Network metrics">
-          {metrics.map((metric) => <article key={metric.key} className="rounded-2xl border border-[#2cff5e]/15 bg-[rgba(7,17,10,0.8)] p-4"><p className="text-xs font-bold uppercase tracking-wider text-[#a8f27a]">{metric.label}</p><p className="mt-2 text-2xl font-extrabold">{display(metric.key, score[metric.key])}</p><Meter metric={metric.key} value={score[metric.key]} /></article>)}
+        {/* Round Score History Selector */}
+        <section className="mt-5 rounded-2xl border border-white/10 bg-[rgba(7,17,10,0.7)] p-3.5 backdrop-blur-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-extrabold uppercase tracking-wider text-[#a8f27a]">
+                Round Score Navigator:
+              </span>
+              {selectedViewRound !== null ? (
+                <span className="rounded-md border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 text-[10px] font-bold text-amber-300">
+                  Viewing Historical Round {selectedViewRound}
+                </span>
+              ) : (
+                <span className="rounded-md border border-[#2cff5e]/40 bg-[#2cff5e]/10 px-2 py-0.5 text-[10px] font-bold text-[#a8f27a] flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[#2cff5e] animate-ping" />
+                  Live Scores
+                </span>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setSelectedViewRound(0)}
+                className={cx(
+                  "rounded-lg px-2.5 py-1 text-xs font-bold transition",
+                  selectedViewRound === 0
+                    ? "border border-[#2cff5e] bg-[#2cff5e]/25 text-[#a8f27a]"
+                    : "border border-white/10 bg-black/40 text-[#8fae93] hover:text-white"
+                )}
+                title="View initial genesis scores before Round 1"
+              >
+                Genesis (R0)
+              </button>
+
+              {[1, 2, 3, 4, 5].map((rNum) => {
+                const hasSnap = Boolean(roundHistory[rNum]);
+                const isPassed = round > rNum;
+                const canView = hasSnap || isPassed;
+                return (
+                  <button
+                    key={rNum}
+                    type="button"
+                    disabled={!canView}
+                    onClick={() => setSelectedViewRound(rNum)}
+                    className={cx(
+                      "rounded-lg px-2.5 py-1 text-xs font-bold transition",
+                      selectedViewRound === rNum
+                        ? "border border-[#2cff5e] bg-[#2cff5e]/25 text-[#a8f27a] shadow-sm"
+                        : canView
+                        ? "border border-white/10 bg-black/40 text-white hover:border-[#a8f27a]/40"
+                        : "border-white/5 bg-white/[0.02] text-[#4a5c4e] cursor-not-allowed opacity-40"
+                    )}
+                    title={canView ? `View scores at the end of Round ${rNum}` : `Round ${rNum} not completed yet`}
+                  >
+                    Round {rNum} {canView ? "✓" : "🔒"}
+                  </button>
+                );
+              })}
+
+              <button
+                type="button"
+                onClick={() => setSelectedViewRound(null)}
+                className={cx(
+                  "rounded-lg px-3 py-1 text-xs font-bold transition flex items-center gap-1.5",
+                  selectedViewRound === null
+                    ? "border border-[#2cff5e] bg-[#2cff5e] text-[#031006]"
+                    : "border border-[#2cff5e]/40 bg-[#2cff5e]/10 text-[#a8f27a] hover:bg-[#2cff5e]/20"
+                )}
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-[#2cff5e] animate-ping" />
+                Live Scores
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowHistoryModal(true)}
+                className="ml-1 rounded-lg border border-white/20 bg-white/5 px-2.5 py-1 text-xs font-bold text-[#c9a6a8] hover:border-white/40 hover:text-white transition"
+                title="Open round comparison matrix"
+              >
+                📊 Score Matrix
+              </button>
+            </div>
+          </div>
+
+          {selectedViewRound !== null && (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3.5 py-2 text-xs text-amber-200">
+              <div className="flex items-center gap-2">
+                <span>⏮️</span>
+                <span>
+                  Inspecting snapshot from <b>{selectedViewRound === 0 ? "Genesis Initial Setup" : `Round ${selectedViewRound} (${roundLabel(selectedViewRound)})`}</b>.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedViewRound(null)}
+                className="font-extrabold text-[#2cff5e] underline hover:text-white transition"
+              >
+                Return to Live Telemetry →
+              </button>
+            </div>
+          )}
         </section>
+
+        {/* Network Metrics Cards */}
+        {(() => {
+          const displayedScore = (selectedViewRound !== null && roundHistory[selectedViewRound])
+            ? roundHistory[selectedViewRound]
+            : score;
+
+          return (
+            <section className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5" aria-label="Network metrics">
+              {metrics.map((metric) => (
+                <article key={metric.key} className="rounded-2xl border border-[#2cff5e]/15 bg-[rgba(7,17,10,0.8)] p-4">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-bold uppercase tracking-wider text-[#a8f27a]">{metric.label}</p>
+                    {selectedViewRound !== null && (
+                      <span className="text-[10px] font-mono text-amber-300">R{selectedViewRound}</span>
+                    )}
+                  </div>
+                  <p className="mt-2 text-2xl font-extrabold">{display(metric.key, displayedScore[metric.key])}</p>
+                  <Meter metric={metric.key} value={displayedScore[metric.key]} />
+                </article>
+              ))}
+            </section>
+          );
+        })()}
 
         {/* Network Intelligence / Reconnaissance Widget */}
         <section className="mt-5 rounded-3xl border border-amber-400/30 bg-gradient-to-r from-[rgba(24,18,6,0.85)] to-[rgba(10,18,12,0.85)] p-5 backdrop-blur-sm">
@@ -696,7 +966,35 @@ export default function DashboardGame({
                 )}
               </div>
             </div>
-            <ol className="grid grid-cols-5 gap-2 text-center">{["Launch", "Attack", "Rebuild", "Re-attack", "Market"].map((name, index) => <li key={name} className={cx("rounded-xl border px-2 py-2 text-[10px] font-bold uppercase", round === index + 1 && "border-[#2cff5e] bg-[#2cff5e]/15", round > index + 1 && "border-[#a8f27a]/35 text-[#a8f27a]", round < index + 1 && "border-white/10 text-[#728575]")}><span className="block text-sm">{round > index + 1 ? "✓" : index + 1}</span>{name}</li>)}</ol>
+            <ol className="grid grid-cols-5 gap-2 text-center">
+              {["Launch", "Attack", "Rebuild", "Re-attack", "Market"].map((name, index) => {
+                const rNum = index + 1;
+                const isPassed = round > rNum;
+                const isCurrent = round === rNum;
+                const isViewing = selectedViewRound === rNum;
+                const isClickable = Boolean(roundHistory[rNum]) || isPassed;
+                return (
+                  <li
+                    key={name}
+                    onClick={() => {
+                      if (isClickable) setSelectedViewRound(rNum);
+                    }}
+                    className={cx(
+                      "rounded-xl border px-2 py-2 text-[10px] font-bold uppercase transition",
+                      isClickable && "cursor-pointer hover:border-[#2cff5e] hover:bg-[#2cff5e]/10",
+                      isViewing && "border-amber-400 bg-amber-400/20 text-amber-200 ring-2 ring-amber-400/50",
+                      isCurrent && !isViewing && "border-[#2cff5e] bg-[#2cff5e]/15",
+                      isPassed && !isViewing && "border-[#a8f27a]/35 text-[#a8f27a]",
+                      round < rNum && "border-white/10 text-[#728575] cursor-not-allowed"
+                    )}
+                    title={isClickable ? `Click to inspect Round ${rNum} scores` : undefined}
+                  >
+                    <span className="block text-sm">{isPassed ? "✓" : rNum}</span>
+                    {name}
+                  </li>
+                );
+              })}
+            </ol>
           </div>
 
           {/* Round Timer Progress Bar */}
@@ -741,7 +1039,7 @@ export default function DashboardGame({
           )}
 
           {round <= competition.currentRound && round === 1 && <LaunchPhase choice={launchChoice} onChoice={(category, option) => setLaunchChoice((current) => ({ ...current, [category]: option }))} pending={isPending} onSubmit={() => run(() => submitLaunch(launchChoice))} />}
-          {round <= competition.currentRound && round === 2 && (
+          {round <= competition.currentRound && (round === 2 || round === 4) && (
             attackSim ? (
               <AttackSimulationView
                 attackerTeam={team.teamName}
@@ -749,40 +1047,17 @@ export default function DashboardGame({
                 startedAt={attackSim.startedAt}
                 duration={attackSim.duration}
                 onComplete={finalizeAttack}
-                onFastForward={finalizeAttack}
               />
             ) : (
-              <AttackPhase
+              <AttackWavePhase
+                roundNum={round}
                 opponents={opponents}
-                target={target}
-                setTarget={setTarget}
-                attack={attack}
-                setAttack={setAttack}
-                level={attackLevel}
-                setLevel={setAttackLevel}
-                pending={isPending}
-                onSubmit={handleLaunchAttack}
-              />
-            )
-          )}
-          {round <= competition.currentRound && round === 4 && (
-            attackSim ? (
-              <AttackSimulationView
-                attackerTeam={team.teamName}
-                attacks={attackSim.attacks}
-                startedAt={attackSim.startedAt}
-                duration={attackSim.duration}
-                onComplete={finalizeAttack}
-                onFastForward={finalizeAttack}
-              />
-            ) : (
-              <Round4MultiAttackPhase
-                opponents={opponents}
-                orders={round4Orders}
-                setOrders={setRound4Orders}
+                orders={round === 2 ? round2Orders : round4Orders}
+                setOrders={round === 2 ? setRound2Orders : setRound4Orders}
                 treasury={score.treasury}
                 pending={isPending}
                 onSubmit={handleLaunchAttack}
+                onSkip={() => setShowSkipConfirm(true)}
               />
             )
           )}
@@ -849,30 +1124,40 @@ function AttackSimulationView({
   startedAt,
   duration = 120,
   onComplete,
-  onFastForward,
 }: {
   attackerTeam: string;
   attacks: AttackSimItem[];
   startedAt: number;
   duration?: number;
   onComplete: () => void;
-  onFastForward: () => void;
 }) {
   const [elapsed, setElapsed] = useState(() => Math.floor((Date.now() - startedAt) / 1000));
   const progress = Math.min(100, Math.max(0, (elapsed / duration) * 100));
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
+  const completedRef = useRef(false);
 
   useEffect(() => {
+    // If already expired on mount (e.g. page refresh after timer finished), fire immediately
+    const initialElapsed = Math.floor((Date.now() - startedAt) / 1000);
+    if (initialElapsed >= duration && !completedRef.current) {
+      completedRef.current = true;
+      onCompleteRef.current();
+      return;
+    }
+
     const timer = setInterval(() => {
       const nowElapsed = Math.floor((Date.now() - startedAt) / 1000);
       setElapsed(nowElapsed);
-      if (nowElapsed >= duration) {
+      if (nowElapsed >= duration && !completedRef.current) {
+        completedRef.current = true;
         clearInterval(timer);
-        onComplete();
+        onCompleteRef.current();
       }
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [startedAt, duration, onComplete]);
+  }, [startedAt, duration]);
 
   const isMulti = attacks.length > 1;
   const targetList = attacks.map((a) => a.target).join(", ");
@@ -880,7 +1165,7 @@ function AttackSimulationView({
 
   const SIM_LOGS = [
     { at: 0, text: isMulti
-        ? `Initiating synchronized multi-target assault across ${attacks.length} validator clusters (${targetList})...`
+        ? `Initiating synchronized assault across ${attacks.length} attack vectors (${targetList})...`
         : `Initiating ${attacks[0]?.level ?? "strike"} packet injection against target validator cluster '${attacks[0]?.target}'...` },
     { at: 12, text: `Routing through global mempool relay nodes. Synthetic load: ${isMulti ? "12,288" : "4,096"} tx/s...` },
     { at: 28, text: `Probing target chain defense mechanisms across targeted consensus layers...` },
@@ -936,7 +1221,7 @@ function AttackSimulationView({
         <div className="rounded-xl border border-white/10 bg-black/40 p-3.5">
           <p className="text-[10px] font-bold uppercase tracking-wider text-[#8fae93]">Attacking Operation</p>
           <p className="mt-1 text-sm font-extrabold text-white">{attackerTeam}</p>
-          <p className="text-xs text-red-300">{attacks.length} Target{attacks.length > 1 ? "s" : ""} Selected</p>
+          <p className="text-xs text-red-300">{attacks.length} Strike{attacks.length > 1 ? "s" : ""} Committed</p>
         </div>
 
         <div className="rounded-xl border border-white/10 bg-black/40 p-3.5">
@@ -945,7 +1230,7 @@ function AttackSimulationView({
             {attacks.map((a) => a.target).join(", ")}
           </p>
           <p className="text-xs text-[#a8c7ac]">
-            {isMulti ? "Simultaneous Strikes" : ATTACK_RULES[attacks[0].attack].label}
+            {isMulti ? "Coordinated Assault" : ATTACK_RULES[attacks[0].attack].label}
           </p>
         </div>
 
@@ -966,13 +1251,13 @@ function AttackSimulationView({
         </div>
       </div>
 
-      {/* Breakdown per target if multi */}
+      {/* Breakdown per strike */}
       {isMulti && (
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {attacks.map((a, idx) => (
             <div key={idx} className="rounded-xl border border-white/10 bg-black/30 p-3">
               <div className="flex items-center justify-between text-xs font-bold text-white">
-                <span className="text-[#a8f27a]">🎯 {a.target}</span>
+                <span className="text-[#a8f27a]">🎯 Strike #{idx + 1}: {a.target}</span>
                 <span className="text-red-300 font-mono">{a.cost} T</span>
               </div>
               <p className="mt-1 text-[11px] text-[#c9a6a8]">
@@ -1010,46 +1295,41 @@ function AttackSimulationView({
         </div>
       </div>
 
-      <div className="mt-6 flex flex-wrap items-center justify-between gap-4 pt-3 border-t border-red-500/10">
+      <div className="mt-6 pt-3 border-t border-red-500/10">
         <p className="text-xs text-[#a8c7ac]">
-          Simulation will conclude and finalize on-chain state when progress completes.
+          Simulation will conclude and finalize on-chain state automatically upon completion of the consensus cycle.
         </p>
-        <button
-          type="button"
-          onClick={onFastForward}
-          className="rounded-lg border border-white/20 bg-white/5 px-3 py-1.5 text-xs font-semibold text-[#c9a6a8] hover:border-white/40 hover:text-white transition"
-          title="Skip the remainder of the simulation"
-        >
-          ⚡ Fast-Forward Simulation
-        </button>
       </div>
     </div>
   );
 }
 
-function Round4MultiAttackPhase({
+function AttackWavePhase({
+  roundNum,
   opponents,
   orders,
   setOrders,
   treasury,
   pending,
   onSubmit,
+  onSkip,
 }: {
+  roundNum: number;
   opponents: Leaderboard[];
   orders: AttackOrder[];
   setOrders: React.Dispatch<React.SetStateAction<AttackOrder[]>>;
   treasury: number;
   pending: boolean;
   onSubmit: () => void;
+  onSkip: () => void;
 }) {
   const addOrder = () => {
-    const existing = new Set(orders.map((o) => o.target));
-    const nextAvailable = opponents.find((o) => !existing.has(o.name))?.name ?? "";
+    const defaultTarget = opponents[0]?.name ?? "";
     setOrders((prev) => [
       ...prev,
       {
         id: String(Date.now() + Math.random()),
-        target: nextAvailable,
+        target: defaultTarget,
         attack: "Spam Attack",
         level: "Standard Attack",
       },
@@ -1065,8 +1345,6 @@ function Round4MultiAttackPhase({
   };
 
   const totalCost = orders.reduce((sum, o) => sum + (ATTACK_LEVELS[o.level]?.cost ?? 0), 0);
-  const targets = orders.map((o) => o.target).filter(Boolean);
-  const hasDuplicates = new Set(targets).size !== targets.length;
   const hasEmpty = orders.some((o) => !o.target);
   const isOverBudget = totalCost > treasury;
 
@@ -1075,34 +1353,50 @@ function Round4MultiAttackPhase({
       <div className="rounded-2xl border border-white/10 bg-black/20 p-5">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-4">
           <div>
-            <h3 className="text-base font-extrabold text-white">⚡ Round 4: Re-attack Wave (Multi-Target)</h3>
+            <div className="flex items-center gap-2">
+              <h3 className="text-base font-extrabold text-white">
+                ⚡ Round {roundNum}: {roundNum === 2 ? "First Attack Wave" : "Re-attack Wave"}
+              </h3>
+              <span className="rounded-full border border-red-500/30 bg-red-500/10 px-2.5 py-0.5 text-[10px] font-bold text-red-300">
+                Offensive Phase
+              </span>
+            </div>
             <p className="mt-1 text-xs text-[#a8c7ac]">
-              Configure coordinated strikes against multiple rival chains. Each strike costs Treasury based on attack intensity.
+              {roundNum === 2
+                ? "Configure a single strike against a competitor chain, or choose to stand down to preserve your treasury."
+                : "Configure strikes against competitor chains. You may target different rivals, launch multiple strikes against the same rival, or choose to stand down to preserve your treasury."}
             </p>
           </div>
-          <button
-            type="button"
-            disabled={pending || orders.length >= opponents.length}
-            onClick={addOrder}
-            className="rounded-xl border border-[#2cff5e]/40 bg-[#2cff5e]/10 px-3.5 py-2 text-xs font-bold text-[#a8f27a] hover:bg-[#2cff5e]/20 disabled:cursor-not-allowed disabled:opacity-40 transition"
-          >
-            + Add Another Target Strike
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={pending}
+              onClick={onSkip}
+              className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-3.5 py-2 text-xs font-bold text-emerald-300 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40 transition"
+              title="Pass this round without attacking to save treasury"
+            >
+              🕊️ Stand Down (Do Not Attack)
+            </button>
+            {roundNum !== 2 && (
+            <button
+              type="button"
+              disabled={pending}
+              onClick={addOrder}
+              className="rounded-xl border border-[#2cff5e]/40 bg-[#2cff5e]/10 px-3.5 py-2 text-xs font-bold text-[#a8f27a] hover:bg-[#2cff5e]/20 disabled:cursor-not-allowed disabled:opacity-40 transition"
+            >
+              + Add Another Strike
+            </button>
+            )}
+          </div>
         </div>
 
         <div className="mt-5 space-y-4">
           {orders.map((order, index) => {
             const cost = ATTACK_LEVELS[order.level].cost;
-            const otherTargets = new Set(orders.filter((o) => o.id !== order.id).map((o) => o.target));
-            const isDuplicate = order.target && otherTargets.has(order.target);
-
             return (
               <div
                 key={order.id}
-                className={cx(
-                  "rounded-xl border p-4 transition",
-                  isDuplicate ? "border-red-500/50 bg-red-950/20" : "border-white/10 bg-black/30"
-                )}
+                className="rounded-xl border border-white/10 bg-black/30 p-4 transition"
               >
                 <div className="flex items-center justify-between pb-3 border-b border-white/5">
                   <div className="flex items-center gap-2">
@@ -1112,11 +1406,6 @@ function Round4MultiAttackPhase({
                     <span className="text-xs font-bold uppercase tracking-wider text-white">
                       Strike Target #{index + 1}
                     </span>
-                    {isDuplicate && (
-                      <span className="rounded bg-red-500/20 px-2 py-0.5 text-[10px] font-bold text-red-300">
-                        Duplicate Target
-                      </span>
-                    )}
                   </div>
                   {orders.length > 1 && (
                     <button
@@ -1125,7 +1414,7 @@ function Round4MultiAttackPhase({
                       onClick={() => removeOrder(order.id)}
                       className="text-xs text-red-400 hover:text-red-300 font-semibold"
                     >
-                      Remove
+                      Remove Strike
                     </button>
                   )}
                 </div>
@@ -1141,12 +1430,8 @@ function Round4MultiAttackPhase({
                     >
                       <option value="">Select a team</option>
                       {opponents.map((opp) => (
-                        <option
-                          key={opp.name}
-                          value={opp.name}
-                          disabled={otherTargets.has(opp.name)}
-                        >
-                          {opp.name} {otherTargets.has(opp.name) ? "(Already selected)" : ""}
+                        <option key={opp.name} value={opp.name}>
+                          {opp.name}
                         </option>
                       ))}
                     </select>
@@ -1202,7 +1487,7 @@ function Round4MultiAttackPhase({
           })}
         </div>
 
-        {/* Multi-Attack Summary & Action */}
+        {/* Action Controls */}
         <div className="mt-6 flex flex-wrap items-center justify-between gap-4 border-t border-white/10 pt-4">
           <div className="flex flex-wrap items-center gap-6 text-xs">
             <div>
@@ -1221,24 +1506,29 @@ function Round4MultiAttackPhase({
             </div>
           </div>
 
-          <button
-            type="button"
-            disabled={pending || orders.length === 0 || hasEmpty || hasDuplicates || isOverBudget}
-            onClick={onSubmit}
-            className="rounded-xl bg-gradient-to-r from-red-600 to-amber-600 px-6 py-3 text-sm font-extrabold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {pending ? "Launching Multi-Strikes…" : `Launch ${orders.length} Multi-Target Strike${orders.length > 1 ? "s" : ""}`}
-          </button>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              disabled={pending}
+              onClick={onSkip}
+              className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm font-bold text-emerald-300 hover:bg-emerald-500/20 transition"
+            >
+              🕊️ Stand Down (Do Not Attack)
+            </button>
+            <button
+              type="button"
+              disabled={pending || orders.length === 0 || hasEmpty || isOverBudget}
+              onClick={onSubmit}
+              className="rounded-xl bg-gradient-to-r from-red-600 to-amber-600 px-6 py-3 text-sm font-extrabold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {pending ? "Launching Strikes…" : `Launch ${orders.length} Strike${orders.length > 1 ? "s" : ""}`}
+            </button>
+          </div>
         </div>
 
-        {hasDuplicates && (
-          <p className="mt-3 text-xs text-red-400">
-            ⚠️ Duplicate targets detected. Each rival team can only be attacked once per re-attack wave.
-          </p>
-        )}
         {hasEmpty && (
           <p className="mt-3 text-xs text-amber-400">
-            ⚠️ Please assign a target rival for every planned strike.
+            ⚠️ Please assign a target rival for every planned strike, or choose &quot;Stand Down (Do Not Attack)&quot;.
           </p>
         )}
         {isOverBudget && (
@@ -1247,66 +1537,6 @@ function Round4MultiAttackPhase({
           </p>
         )}
       </div>
-    </div>
-  );
-}
-
-function AttackPhase({
-  opponents,
-  target,
-  setTarget,
-  attack,
-  setAttack,
-  level,
-  setLevel,
-  pending,
-  onSubmit,
-}: {
-  opponents: Leaderboard[];
-  target: string;
-  setTarget: (value: string) => void;
-  attack: AttackCategory;
-  setAttack: (value: AttackCategory) => void;
-  level: AttackType;
-  setLevel: (value: AttackType) => void;
-  pending: boolean;
-  onSubmit: () => void;
-}) {
-  return (
-    <div className="mt-7 grid gap-5 xl:grid-cols-[1fr_280px]">
-      <div>
-        <p className="text-sm leading-6 text-[#a8c7ac]">Configure your attack vector and intensity against a rival network. The treasury cost is deducted whether the attack succeeds or is deflected.</p>
-        <div className="mt-5 grid gap-4 md:grid-cols-3">
-          <label className="block text-xs font-bold uppercase tracking-[0.13em] text-[#a8f27a]">Target
-            <select value={target} disabled={pending} onChange={(event) => setTarget(event.target.value)} className="mt-2 w-full rounded-xl border border-white/15 bg-[#061008] px-3 py-3 text-sm text-white">
-              <option value="">Choose a team</option>
-              {opponents.map((opponent) => <option key={opponent.name} value={opponent.name}>{opponent.name}</option>)}
-            </select>
-          </label>
-          <label className="block text-xs font-bold uppercase tracking-[0.13em] text-[#a8f27a]">Attack type
-            <select value={attack} disabled={pending} onChange={(event) => setAttack(event.target.value as AttackCategory)} className="mt-2 w-full rounded-xl border border-white/15 bg-[#061008] px-3 py-3 text-sm text-white">
-              {attackCategories.map((category) => <option key={category} value={category}>{ATTACK_RULES[category].label}</option>)}
-            </select>
-          </label>
-          <label className="block text-xs font-bold uppercase tracking-[0.13em] text-[#a8f27a]">Attack level
-            <select value={level} disabled={pending} onChange={(event) => setLevel(event.target.value as AttackType)} className="mt-2 w-full rounded-xl border border-white/15 bg-[#061008] px-3 py-3 text-sm text-white">
-              {attackTypes.map((attackLevel) => <option key={attackLevel} value={attackLevel}>{attackLevel + " · cost " + ATTACK_LEVELS[attackLevel].cost}</option>)}
-            </select>
-          </label>
-        </div>
-        <button type="button" disabled={pending || !target} onClick={onSubmit} className="mt-5 rounded-xl bg-[#ff6b6b] px-5 py-3 text-sm font-extrabold text-[#250403] disabled:cursor-not-allowed disabled:opacity-50">
-          {pending ? "Launching…" : "Launch " + level}
-        </button>
-      </div>
-      <aside className="rounded-2xl border border-[#a8f27a]/25 bg-[#a8f27a]/5 p-5">
-        <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#a8f27a]">Strike Configuration</p>
-        <dl className="mt-4 space-y-3 text-sm">
-          <div className="flex justify-between gap-4"><dt className="text-[#8fae93]">Target</dt><dd className="font-bold text-white truncate">{target || "None selected"}</dd></div>
-          <div className="flex justify-between gap-4"><dt className="text-[#8fae93]">Vector</dt><dd className="font-bold text-white">{ATTACK_RULES[attack].label}</dd></div>
-          <div className="flex justify-between gap-4"><dt className="text-[#8fae93]">Attack strength</dt><dd className="font-bold text-[#2cff5e]">{ATTACK_LEVELS[level].strength}</dd></div>
-          <div className="flex justify-between gap-4"><dt className="text-[#8fae93]">Treasury cost</dt><dd className="font-bold text-[#ff8080]">{ATTACK_LEVELS[level].cost} T</dd></div>
-        </dl>
-      </aside>
     </div>
   );
 }
